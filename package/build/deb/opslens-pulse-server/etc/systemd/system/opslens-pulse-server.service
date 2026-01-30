@@ -1,0 +1,11 @@
+[Unit]
+Description=OpsLens Pulse Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/opslens-pulse-server
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

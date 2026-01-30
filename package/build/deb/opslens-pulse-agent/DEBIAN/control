@@ -1,0 +1,7 @@
+Package: opslens-pulse-agent
+Version: 1.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Vivek Bangare
+Description: opslens Pulse Host Monitoring Agent

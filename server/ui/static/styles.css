@@ -1,0 +1,54 @@
+body {
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 20px;
+}
+
+h1 {
+  margin-bottom: 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 10px;
+  border-bottom: 1px solid #334155;
+  text-align: left;
+}
+
+.alive {
+  color: #22c55e;
+}
+
+.dead {
+  color: #ef4444;
+}
+
+/* 🔴🟢 heartbeat dot */
+.dot {
+  height: 10px;
+  width: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.dot.alive {
+  background-color: #22c55e;
+  animation: pulse 1.5s infinite;
+}
+
+.dot.dead {
+  background-color: #ef4444;
+}
+
+/* pulsing animation */
+@keyframes pulse {
+  0%   { transform: scale(0.8); opacity: 0.7; }
+  50%  { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.8); opacity: 0.7; }
+}

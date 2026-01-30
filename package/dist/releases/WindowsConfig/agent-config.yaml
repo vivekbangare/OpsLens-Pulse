@@ -1,0 +1,7 @@
+server:
+  url: "http://localhost:9898"
+  token: "changeme"
+
+agent:
+  interval_seconds: 10
+  self_upgrade: false
