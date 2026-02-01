@@ -4,27 +4,25 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"opslense-pulse/server/store"
-	"opslense-pulse/shared"
 	"strings"
 	"time"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
 )
 
-var expectedToken string
-
-func SetToken(token string) {
-	expectedToken = token
-}
-
+// validateToken validates Authorization header using shared auth token
 func validateToken(r *http.Request) bool {
 	authHeader := r.Header.Get("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return false
 	}
+
 	token := strings.TrimPrefix(authHeader, "Bearer ")
-	return token == expectedToken
+	return token == GetAuthToken()
 }
 
+// MetricsHandler receives host metrics from agent
 func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	if !validateToken(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -32,7 +30,7 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -44,12 +42,19 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	store.SaveMetrics(m)
 	store.UpdateHeartbeat(m.Hostname, time.Now())
+
 	w.WriteHeader(http.StatusOK)
 }
 
+// HostsHandler returns all known hosts with metrics
 func HostsHandler(w http.ResponseWriter, r *http.Request) {
 	if !validateToken(r) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 

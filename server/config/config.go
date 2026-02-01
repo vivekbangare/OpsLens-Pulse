@@ -23,7 +23,8 @@ func init() {
 	}
 }
 
-func LoadOrCreate(path string) (ServerConfig, error) {
+// LoadOrCreate returns: ServerConfig, path, created(bool), error
+func LoadOrCreate(path string) (ServerConfig, string, bool, error) {
 	var cfg ServerConfig
 
 	if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
@@ -34,21 +35,26 @@ func LoadOrCreate(path string) (ServerConfig, error) {
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// create default config
 		cfg = ServerConfig{
 			ListenPort: 9898,
-			Token:      "changeme",
+			Token:      "",
 		}
-		return cfg, save(path, cfg)
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+
+		return cfg, path, true, nil
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return cfg, err
+		return cfg, path, false, err
 	}
 	defer f.Close()
 
 	err = yaml.NewDecoder(f).Decode(&cfg)
-	return cfg, err
+	return cfg, path, false, err
 }
 
 func save(path string, cfg ServerConfig) error {

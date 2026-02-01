@@ -92,7 +92,7 @@ EOF
 cat > $PKG/etc/opslens-pulse/agent-config.yaml <<EOF
 server:
   url: "http://localhost:9898"
-  token: "changeme"
+  token: ""
 
 agent:
   interval_seconds: 10
@@ -116,7 +116,7 @@ mkdir -p "$WIN_CONFIG_DIR"
 cat > "$WIN_CONFIG_DIR/agent-config.yaml" <<EOF
 server:
   url: "http://localhost:9898"
-  token: "changeme"
+  token: ""
 
 agent:
   interval_seconds: 10
@@ -200,7 +200,7 @@ EOF
 
 cat > $PKG_SRV/etc/opslens-pulse/server-config.yaml <<EOF
 listen_port: 9898
-token: changeme
+token: ""
 EOF
 
 dpkg-deb --build $PKG_SRV

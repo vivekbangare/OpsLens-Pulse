@@ -9,6 +9,7 @@ import (
 
 	"opslense-pulse/server/api"
 	"opslense-pulse/server/config"
+	"opslense-pulse/shared"
 )
 
 const ServerVersion = "1.0.0"
@@ -49,6 +50,8 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func main() {
+	shared.InitLogger("server")
+	log.Println("🚀 OpsLens-Pulse Server starting...")
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Config path")
 	showHelp := flag.Bool("help", false, "Help")
@@ -64,20 +67,26 @@ func main() {
 		return
 	}
 
-	cfg, err := config.LoadOrCreate(configPath)
+	cfg, path, created, err := config.LoadOrCreate(configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
+	if created {
+		log.Printf("📄 Server config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Server config loaded from: %s\n", path)
+	}
 
-	// Allow override from environment variable
 	token := os.Getenv("SERVER_TOKEN")
-	if token == "" {
+	if token != "" {
+		log.Println("🔐 Server token loaded from environment variable")
+	} else {
+		log.Println("🔐 Server token loaded from config file")
 		token = cfg.Token
 	}
 	api.SetAuthToken(token)
-
-	// Serve static UI files
-	http.Handle("/", http.FileServer(http.Dir("./ui/static")))
+	// Static file server
+	http.Handle("/", http.FileServer(http.Dir("./server/ui/static")))
 
 	// API endpoints with auth
 	http.HandleFunc("/api/heartbeat", authMiddleware(api.HeartbeatHandler))

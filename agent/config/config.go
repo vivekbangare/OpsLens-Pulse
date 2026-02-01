@@ -33,8 +33,9 @@ func init() {
 	}
 }
 
-func LoadOrCreateConfig(path string) (Config, error) {
+func LoadOrCreateConfig(path string) (Config, string, bool, error) {
 	var cfg Config
+	created := false
 
 	if env := os.Getenv("OPS_AGENT_CONFIG"); env != "" {
 		path = env
@@ -47,24 +48,25 @@ func LoadOrCreateConfig(path string) (Config, error) {
 		cfg = Config{
 			Server: ServerConfig{
 				URL:   "http://localhost:9898",
-				Token: "changeme",
+				Token: "",
 			},
 			Agent: AgentConfig{
-				IntervalSeconds: 10,
+				IntervalSeconds: 5,
 				SelfUpgrade:     false,
 			},
 		}
-		return cfg, save(path, cfg)
+		created = true
+		return cfg, path, created, nil
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return cfg, err
+		return cfg, path, false, err
 	}
 	defer f.Close()
 
 	err = yaml.NewDecoder(f).Decode(&cfg)
-	return cfg, err
+	return cfg, path, false, err
 }
 
 func save(path string, cfg Config) error {

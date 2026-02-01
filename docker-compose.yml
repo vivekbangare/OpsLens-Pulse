@@ -1,22 +1,30 @@
 services:
   server:
     image: golang:1.22
+    container_name: opslens-server
     working_dir: /app
     volumes:
       - .:/app
     command: go run server/main.go
     environment:
-      SERVER_TOKEN: mysecrettoken 
+      SERVER_TOKEN: mysecrettoken
+      OPS_SERVER_CONFIG: /app/server-config.yaml
     ports:
       - "9898:9898"
+
   agent:
     image: golang:1.22
+   # container_name: opslens-agent
     working_dir: /app
     volumes:
       - .:/app
-    command: go run agent/main.go   
+    command: go run agent/main.go
     environment:
       SERVER_URL: http://server:9898
-      SERVER_TOKEN: mysecrettoken 
+      SERVER_TOKEN: mysecrettoken
+      OPS_AGENT_CONFIG: /app/agent-config.yaml
     depends_on:
-      - server  
+      - server
+volumes:
+  server-logs:
+  agent-logs:

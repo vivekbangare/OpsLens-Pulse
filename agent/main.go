@@ -39,6 +39,8 @@ Env:
 }
 
 func main() {
+	shared.InitLogger("agent")
+	log.Println("🚀 OpsLens-Pulse Agent starting...")
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Config path")
 	showHelp := flag.Bool("help", false, "Help")
@@ -54,20 +56,32 @@ func main() {
 		return
 	}
 
-	cfg, err := config.LoadOrCreateConfig(configPath)
+	cfg, path, created, err := config.LoadOrCreateConfig(configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 
+	if created {
+		log.Printf("📄 Agent config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Agent config loaded from: %s\n", path)
+	}
+
 	hostname, _ := os.Hostname()
 	serverURL := os.Getenv("SERVER_URL")
-	if serverURL == "" {
+	if serverURL != "" {
+		log.Println("🌐 Server URL loaded from environment variable")
+	} else {
+		log.Println("🌐 Server URL loaded from config file")
 		serverURL = cfg.Server.URL
 	}
 
 	token := os.Getenv("SERVER_TOKEN")
-	if token == "" {
-		log.Fatal("SERVER_TOKEN env variable is required")
+	if token != "" {
+		log.Println("🔐 Token loaded from environment variable")
+	} else {
+		log.Println("🔐 Token loaded from config file")
+		token = cfg.Server.Token
 	}
 
 	for {

@@ -16,3 +16,14 @@ sudo systemctl start opslens-agent
 ```
 .\install.ps1
 ```
+
+
+docker build -t deb-builder -f Dockerfile.deb .
+
+docker run --rm \
+  -v "$(pwd)":/build \
+  -w /build \
+  deb-builder \
+  ./release.sh 1.0.0
+
+curl -H "Authorization: Bearer mysecrettoken" http://localhost:9898/api/hosts
