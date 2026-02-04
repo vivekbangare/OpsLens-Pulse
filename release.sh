@@ -114,42 +114,30 @@ echo "🪟 Building Windows agent..."
 (cd agent && GOOS=windows GOARCH=amd64 \
 go build -o ../../$DIST/${AGENT_APP}_${RAW_VERSION}_windows_amd64.exe)
 
-WIN_CONFIG_DIR="$DIST/WindowsConfig"
-mkdir -p "$WIN_CONFIG_DIR"
-
-cat > "$WIN_CONFIG_DIR/agent-config.yaml" <<EOF
-server:
-  url: "http://localhost:9898"
-  token: ""
-
-agent:
-  interval_seconds: 10
-  self_upgrade: false
-EOF
-
 WIN_INSTALL_SCRIPT="$DIST/install-windows-agent.ps1"
-cat > $WIN_INSTALL_SCRIPT <<EOF
+cat > "$WIN_INSTALL_SCRIPT" <<'EOF'
 param(
-    [string]`$ConfigPath = ""
+    [string]$ConfigPath = ""
 )
 
-`$SourceDir = Split-Path -Parent `$MyInvocation.MyCommand.Definition
-`$AgentExe = Join-Path `$SourceDir "${AGENT_APP}_${RAW_VERSION}_windows_amd64.exe"
-`$ConfigSrc = Join-Path `$SourceDir "WindowsConfig\\agent-config.yaml"
+$SourceDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$AgentExe = Join-Path $SourceDir "opslens-pulse-agent.exe"
+$ConfigSrc = Join-Path $SourceDir "WindowsConfig\agent-config.yaml"
 
-if (`$ConfigPath -eq "") {
-    `$ConfigDestDir = "C:\\ProgramData\\OpsLens-Pulse"
+if ($ConfigPath -eq "") {
+    $ConfigDestDir = "C:\ProgramData\OpsLens-Pulse"
 } else {
-    `$ConfigDestDir = `$ConfigPath
+    $ConfigDestDir = $ConfigPath
 }
 
-New-Item -ItemType Directory -Path `$ConfigDestDir -Force | Out-Null
+New-Item -ItemType Directory -Path $ConfigDestDir -Force | Out-Null
 
-Copy-Item `$ConfigSrc (Join-Path `$ConfigDestDir "agent-config.yaml") -Force
-Copy-Item `$AgentExe (Join-Path `$ConfigDestDir "opslens-pulse-agent.exe") -Force
+Copy-Item $ConfigSrc (Join-Path $ConfigDestDir "agent-config.yaml") -Force
+Copy-Item $AgentExe (Join-Path $ConfigDestDir "opslens-pulse-agent.exe") -Force
 
-Write-Host "✅ OpsLens agent installed at `$ConfigDestDir"
+Write-Host "✅ OpsLens agent installed at $ConfigDestDir"
 EOF
+echo "✅ Windows agent install script created at $WIN_INSTALL_SCRIPT"
 
 # ---------------------------
 # Build Windows server
