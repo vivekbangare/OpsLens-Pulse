@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
+echo "📦 Starting OpsLens Pulse release..."
+
 # ---------------------------
 # Version handling
 # ---------------------------
@@ -12,7 +14,7 @@ if [ -z "$RAW_VERSION" ]; then
   exit 1
 fi
 
-# Strip leading 'v'
+# Strip leading 'v' for Debian packages
 VERSION=${RAW_VERSION#v}
 
 # Validate version format
@@ -24,14 +26,21 @@ fi
 
 echo "📦 Building release version: $VERSION"
 
+# ---------------------------
+# Constants
+# ---------------------------
 AGENT_APP=opslens-pulse-agent
 SERVER_APP=opslens-pulse-server
+
 PACKAGE_DIR=package
 BUILD=$PACKAGE_DIR/build
 DIST=$PACKAGE_DIR/dist/releases
 
-rm -rf $PACKAGE_DIR
-mkdir -p $BUILD $DIST
+# ---------------------------
+# Clean & prepare dirs
+# ---------------------------
+rm -rf "$PACKAGE_DIR"
+mkdir -p "$BUILD" "$DIST"
 
 # ---------------------------
 # Go modules tidy
@@ -46,28 +55,31 @@ go mod tidy
 # ---------------------------
 echo "🔧 Building Linux agent..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-go build -o $BUILD/$AGENT_APP ./agent
+go build -o "$BUILD/$AGENT_APP" ./agent
+
 [ -f "$BUILD/$AGENT_APP" ] || { echo "❌ Linux agent build failed"; exit 1; }
 
 echo "🔧 Building Linux server..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-go build -o $BUILD/$SERVER_APP ./server
+go build -o "$BUILD/$SERVER_APP" ./server
+
 [ -f "$BUILD/$SERVER_APP" ] || { echo "❌ Linux server build failed"; exit 1; }
 
 # ---------------------------
-# Create DEB package for agent
+# Create DEB package (agent)
 # ---------------------------
 echo "📦 Creating DEB package for agent..."
-PKG=$BUILD/deb/$AGENT_APP
+PKG_AGENT="$BUILD/deb/$AGENT_APP"
+
 mkdir -p \
-  $PKG/DEBIAN \
-  $PKG/usr/local/bin \
-  $PKG/etc/opslens-pulse \
-  $PKG/etc/systemd/system
+  "$PKG_AGENT/DEBIAN" \
+  "$PKG_AGENT/usr/local/bin" \
+  "$PKG_AGENT/etc/opslens-pulse" \
+  "$PKG_AGENT/etc/systemd/system"
 
-cp $BUILD/$AGENT_APP $PKG/usr/local/bin/
+cp "$BUILD/$AGENT_APP" "$PKG_AGENT/usr/local/bin/"
 
-cat > $PKG/DEBIAN/control <<EOF
+cat > "$PKG_AGENT/DEBIAN/control" <<EOF
 Package: $AGENT_APP
 Version: $VERSION
 Section: utils
@@ -77,7 +89,7 @@ Maintainer: Vivek Bangare
 Description: OpsLens Pulse Host Monitoring Agent
 EOF
 
-cat > $PKG/etc/systemd/system/$AGENT_APP.service <<EOF
+cat > "$PKG_AGENT/etc/systemd/system/$AGENT_APP.service" <<EOF
 [Unit]
 Description=OpsLens Pulse Agent
 After=network.target
@@ -92,7 +104,7 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-cat > $PKG/etc/opslens-pulse/agent-config.yaml <<EOF
+cat > "$PKG_AGENT/etc/opslens-pulse/agent-config.yaml" <<EOF
 server:
   url: "http://localhost:9898"
   token: ""
@@ -102,85 +114,53 @@ agent:
   self_upgrade: false
 EOF
 
-dpkg-deb --build $PKG
-mv $BUILD/deb/$AGENT_APP.deb $DIST/${AGENT_APP}_${VERSION}_amd64.deb
-echo "✅ DEB agent package created"
+dpkg-deb --build "$PKG_AGENT"
+mv "$BUILD/deb/$AGENT_APP.deb" "$DIST/${AGENT_APP}_${VERSION}_amd64.deb"
+
+echo "✅ Agent DEB created"
 
 # ---------------------------
 # Build Windows agent
 # ---------------------------
 echo "🪟 Building Windows agent..."
+mkdir -p "$DIST"
+
 (cd agent && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-go build -o ../../$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe)
+go build -o "../../$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe")
 
 [ -f "$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe" ] \
   || { echo "❌ Windows agent build failed"; exit 1; }
 
-# Windows config
-WIN_CONFIG_DIR="$DIST/WindowsConfig"
-mkdir -p "$WIN_CONFIG_DIR"
-
-cat > "$WIN_CONFIG_DIR/agent-config.yaml" <<EOF
-server:
-  url: "http://localhost:9898"
-  token: ""
-
-agent:
-  interval_seconds: 10
-  self_upgrade: false
-EOF
-
-# Windows installer
-WIN_INSTALL_SCRIPT="$DIST/install-windows-agent.ps1"
-cat > "$WIN_INSTALL_SCRIPT" <<'EOF'
-param(
-    [string]$ConfigPath = ""
-)
-
-$SourceDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$AgentExe = Get-ChildItem $SourceDir -Filter "opslens-pulse-agent_*_windows_amd64.exe" | Select-Object -First 1
-$ConfigSrc = Join-Path $SourceDir "WindowsConfig\agent-config.yaml"
-
-if ($ConfigPath -eq "") {
-    $ConfigDestDir = "C:\ProgramData\OpsLens-Pulse"
-} else {
-    $ConfigDestDir = $ConfigPath
-}
-
-New-Item -ItemType Directory -Path $ConfigDestDir -Force | Out-Null
-Copy-Item $ConfigSrc (Join-Path $ConfigDestDir "agent-config.yaml") -Force
-Copy-Item $AgentExe.FullName (Join-Path $ConfigDestDir "opslens-pulse-agent.exe") -Force
-
-Write-Host "✅ OpsLens agent installed at $ConfigDestDir"
-EOF
-
-echo "✅ Windows agent installer created"
+echo "✅ Windows agent EXE created"
 
 # ---------------------------
 # Build Windows server
 # ---------------------------
 echo "🪟 Building Windows server..."
+
 (cd server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-go build -o ../../$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe)
+go build -o "../../$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe")
 
 [ -f "$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe" ] \
   || { echo "❌ Windows server build failed"; exit 1; }
 
+echo "✅ Windows server EXE created"
+
 # ---------------------------
-# Create DEB package for server
+# Create DEB package (server)
 # ---------------------------
 echo "📦 Creating DEB package for server..."
-PKG_SRV=$BUILD/deb/$SERVER_APP
+PKG_SERVER="$BUILD/deb/$SERVER_APP"
 
 mkdir -p \
-  $PKG_SRV/DEBIAN \
-  $PKG_SRV/usr/local/bin \
-  $PKG_SRV/etc/opslens-pulse \
-  $PKG_SRV/etc/systemd/system
+  "$PKG_SERVER/DEBIAN" \
+  "$PKG_SERVER/usr/local/bin" \
+  "$PKG_SERVER/etc/opslens-pulse" \
+  "$PKG_SERVER/etc/systemd/system"
 
-cp $BUILD/$SERVER_APP $PKG_SRV/usr/local/bin/
+cp "$BUILD/$SERVER_APP" "$PKG_SERVER/usr/local/bin/"
 
-cat > $PKG_SRV/DEBIAN/control <<EOF
+cat > "$PKG_SERVER/DEBIAN/control" <<EOF
 Package: $SERVER_APP
 Version: $VERSION
 Section: utils
@@ -190,7 +170,7 @@ Maintainer: Vivek Bangare
 Description: OpsLens Pulse Metrics Server
 EOF
 
-cat > $PKG_SRV/etc/systemd/system/$SERVER_APP.service <<EOF
+cat > "$PKG_SERVER/etc/systemd/system/$SERVER_APP.service" <<EOF
 [Unit]
 Description=OpsLens Pulse Server
 After=network.target
@@ -204,21 +184,29 @@ User=root
 WantedBy=multi-user.target
 EOF
 
-cat > $PKG_SRV/etc/opslens-pulse/server-config.yaml <<EOF
+cat > "$PKG_SERVER/etc/opslens-pulse/server-config.yaml" <<EOF
 listen_port: 9898
 token: ""
 EOF
 
-dpkg-deb --build $PKG_SRV
-mv $BUILD/deb/$SERVER_APP.deb $DIST/${SERVER_APP}_${VERSION}_amd64.deb
-echo "✅ DEB server package created"
+dpkg-deb --build "$PKG_SERVER"
+mv "$BUILD/deb/$SERVER_APP.deb" "$DIST/${SERVER_APP}_${VERSION}_amd64.deb"
+
+echo "✅ Server DEB created"
 
 # ---------------------------
 # Checksums
 # ---------------------------
-cd $DIST
+echo "🔐 Generating checksums..."
+cd "$DIST"
 sha256sum * > SHA256SUMS.txt
+
 echo "✅ SHA256SUMS.txt created"
 
+# ---------------------------
+# Summary
+# ---------------------------
+echo ""
 echo "🎉 Release $RAW_VERSION built successfully!"
-echo "Artifacts are located in the '$DIST' directory."
+echo "📦 Artifacts:"
+ls -lh
