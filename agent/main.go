@@ -41,6 +41,7 @@ Env:
 func main() {
 	shared.InitLogger("agent")
 	log.Println("🚀 OpsLens-Pulse Agent starting...")
+
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Config path")
 	showHelp := flag.Bool("help", false, "Help")
@@ -60,33 +61,30 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	if created {
 		log.Printf("📄 Agent config created at: %s\n", path)
 	} else {
 		log.Printf("📄 Agent config loaded from: %s\n", path)
 	}
 
-	hostname, _ := os.Hostname()
-	serverURL := os.Getenv("SERVER_URL")
-	if serverURL != "" {
-		log.Println("🌐 Server URL loaded from environment variable")
-	} else {
-		log.Println("🌐 Server URL loaded from config file")
-		serverURL = cfg.Server.URL
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
 	}
 
-	token := os.Getenv("SERVER_TOKEN")
-	if token != "" {
-		log.Println("🔐 Token loaded from environment variable")
-	} else {
-		log.Println("🔐 Token loaded from config file")
-		token = cfg.Server.Token
+	hostname, _ := os.Hostname()
+	serverURL := cfg.Server.URL
+	token := cfg.Server.Token
+
+	if serverURL == "" || token == "" {
+		log.Fatal("🌐 server.url and 🔐 server.token must be set in agent config")
 	}
 
 	for {
-		osName, uptime := metrics.HostInfo()
+		start := time.Now()
+
+		// Collect metrics
 		memTotal, memUsed := metrics.Memory()
+		osName, uptime := metrics.HostInfo()
 
 		m := shared.HostMetrics{
 			Hostname:   hostname,
@@ -97,6 +95,7 @@ func main() {
 			MemUsedMB:  memUsed,
 			UpTimeSec:  uptime,
 			CPUPercent: metrics.CPUPercent(),
+			Tags:       cfg.Tags,
 		}
 
 		// Send metrics
@@ -109,6 +108,11 @@ func main() {
 			log.Println("Heartbeat failed:", err)
 		}
 
-		time.Sleep(time.Duration(cfg.Agent.IntervalSeconds) * time.Second)
+		// Correct sleep to avoid drift
+		elapsed := time.Since(start)
+		sleep := time.Duration(cfg.Agent.IntervalSeconds)*time.Second - elapsed
+		if sleep > 0 {
+			time.Sleep(sleep)
+		}
 	}
 }

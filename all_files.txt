@@ -1,0 +1,1375 @@
+===== FILE: ./server-config.yaml =====
+listen_port: 9898
+token: mysecrettoken
+
+
+===== FILE: ./server/ui/static/index.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>OpsLens Pulse</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<h1>🖥️ OpsLens Pulse</h1>
+
+<div id="login">
+  <input type="password" id="tokenInput" placeholder="Enter access token" />
+  <button onclick="login()">Login</button>
+  <div id="error"></div>
+</div>
+
+<div id="filters" style="display:none">
+  <input type="text" id="searchInput" placeholder="Search hostname or IP" oninput="applyFilters()" />
+  <input type="text" id="tagFilterInput" placeholder="Filter by tag (key=value)" oninput="applyFilters()" />
+</div>
+
+<table id="hosts" style="display:none">
+  <thead>
+    <tr>
+      <th>Host</th>
+      <th>IP</th>
+      <th>CPU</th>
+      <th>Memory</th>
+      <th>Tags</th>
+      <th>Status</th>
+      <th>Last Seen</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<div id="modalOverlay"></div>
+<div id="hostModal">
+  <h2 id="modalTitle"></h2>
+  <div id="modalContent"></div>
+  <button onclick="closeModal()">Close</button>
+</div>
+
+<script src="/script.js"></script>
+</body>
+</html>
+
+
+===== FILE: ./server/ui/static/styles.css =====
+body {
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 20px;
+}
+
+h1 { margin-bottom: 16px; }
+
+#login input, #login button { padding: 6px; }
+#error { color: red; margin-top: 8px; }
+
+#filters input { padding: 6px; margin-right: 6px; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 10px; border-bottom: 1px solid #334155; text-align: left; cursor: pointer; }
+tr:hover { background: #1e293b; }
+
+.alive { color: #22c55e; }
+.dead { color: #ef4444; }
+
+.tag { display: inline-block; background: #eef2ff; color: #3730a3; padding: 2px 6px; margin: 2px; border-radius: 4px; font-size: 12px; }
+.tag-key { font-weight: bold; }
+
+/* modal */
+#hostModal {
+  display: none;
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: #0f172a;
+  border: 1px solid #334155;
+  padding: 20px;
+  z-index: 1000;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 0 20px rgba(0,0,0,0.5);
+}
+#hostModal h2 { margin-top: 0; }
+#hostModal button { margin-top: 10px; padding: 6px 10px; }
+
+#modalOverlay {
+  display: none;
+  position: fixed;
+  top:0; left:0;
+  width:100%; height:100%;
+  background: rgba(0,0,0,0.5);
+  z-index: 500;
+}
+
+
+===== FILE: ./server/ui/static/script.js =====
+const tbody = document.querySelector("#hosts tbody")
+const table = document.querySelector("#hosts")
+const loginBox = document.querySelector("#login")
+const errorBox = document.querySelector("#error")
+
+let token = sessionStorage.getItem("token")
+
+function timeAgo(date) {
+  const seconds = Math.floor((Date.now() - new Date(date)) / 1000)
+
+  if (seconds < 10) return "just now"
+  if (seconds < 60) return `${seconds}s ago`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  return `${Math.floor(seconds / 3600)}h ago`
+}
+
+function renderHosts(data) {
+  tbody.innerHTML = ""
+
+  data.forEach(h => {
+    const tr = document.createElement("tr")
+    tr.innerHTML = `
+      <td>${h.hostname}</td>
+      <td>${h.cpu_percent.toFixed(1)}%</td>
+      <td>${h.mem_used_mb} MB</td>
+      <td>${renderTags(h.tags)}</td> <!-- 👈 TAGS -->
+      <td class="${h.alive ? "alive" : "dead"}">
+        ${h.alive ? "Alive" : "Down"}
+      </td>
+      <td>${timeAgo(h.last_seen)}</td>
+    `
+    tbody.appendChild(tr)
+  })
+}
+
+function authFetch(url) {
+  return fetch(url, {
+    headers: {
+      "Authorization": "Bearer " + token
+    }
+  })
+}
+
+function loadHosts() {
+  authFetch("/api/hosts")
+    .then(res => {
+      if (res.status === 401) throw new Error("unauthorized")
+      return res.json()
+    })
+    .then(data => {
+      errorBox.textContent = ""
+      renderHosts(data)
+    })
+    .catch(() => {
+      errorBox.textContent = "Invalid token"
+      logout()
+    })
+}
+
+function login() {
+  const input = document.getElementById("tokenInput").value.trim()
+  if (!input) return
+
+  token = input
+  sessionStorage.setItem("token", token)
+
+  // validate token first
+  authFetch("/api/hosts")
+    .then(res => {
+      if (!res.ok) throw new Error()
+      loginBox.style.display = "none"
+      table.style.display = "table"
+      loadHosts()
+    })
+    .catch(() => {
+      errorBox.textContent = "Invalid token"
+      sessionStorage.removeItem("token")
+      token = null
+    })
+}
+
+function logout() {
+  sessionStorage.removeItem("token")
+  token = null
+  loginBox.style.display = "block"
+  table.style.display = "none"
+}
+
+// auto-login
+if (token) {
+  loginBox.style.display = "none"
+  table.style.display = "table"
+  loadHosts()
+}
+
+// refresh every 5 seconds
+setInterval(() => {
+  if (token) loadHosts()
+}, 5000)
+
+function renderTags(tags) {
+  if (!tags || Object.keys(tags).length === 0) {
+    return "<span style='color:#999'>—</span>"
+  }
+
+  return Object.entries(tags)
+    .map(([k, v]) =>
+      `<span class="tag"><span class="tag-key">${k}</span>: ${v}</span>`
+    )
+    .join("")
+}
+
+===== FILE: ./server/config/config.go =====
+package config
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ServerConfig struct {
+	ListenPort int    `yaml:"listen_port"`
+	Token      string `yaml:"token"`
+}
+
+var DefaultPath string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		DefaultPath = `C:\ProgramData\OpsLens-Pulse\server-config.yaml`
+	} else {
+		DefaultPath = "/etc/opslens-pulse/server-config.yaml"
+	}
+}
+
+// LoadOrCreate returns: ServerConfig, path, created(bool), error
+func LoadOrCreate(path string) (ServerConfig, string, bool, error) {
+	var cfg ServerConfig
+
+	if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
+		path = env
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// create default config
+		cfg = ServerConfig{
+			ListenPort: 9898,
+			Token:      "",
+		}
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+
+		return cfg, path, true, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return cfg, path, false, err
+	}
+	defer f.Close()
+
+	err = yaml.NewDecoder(f).Decode(&cfg)
+	return cfg, path, false, err
+}
+
+func save(path string, cfg ServerConfig) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return yaml.NewEncoder(f).Encode(cfg)
+}
+
+func (c ServerConfig) Validate() error {
+	if c.ListenPort <= 0 || c.ListenPort > 65535 {
+		return errors.New("listen_port must be between 1 and 65535")
+	}
+	if c.Token == "" {
+		return errors.New("token must be set")
+	}
+	return nil
+}
+
+
+===== FILE: ./server/api/token.go =====
+package api
+
+var authToken string
+
+func SetAuthToken(t string) {
+	authToken = t
+}
+
+func GetAuthToken() string {
+	return authToken
+}
+
+
+===== FILE: ./server/api/metrics.go =====
+// server/api/metrics.go
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"time"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+// MetricsHandler receives host metrics from agent
+
+func MetricsHandler(w http.ResponseWriter, r *http.Request) {
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var m shared.HostMetrics
+	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	store.SaveMetrics(m)
+	store.UpdateHeartbeat(m.Hostname, time.Now())
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// HostsHandler returns all known hosts with metrics
+func HostsHandler(w http.ResponseWriter, r *http.Request) {
+
+	filters := map[string]string{}
+	for key, values := range r.URL.Query() {
+		if strings.HasPrefix(key, "tag.") && len(values) > 0 {
+			tagKey := strings.TrimPrefix(key, "tag.")
+			filters[tagKey] = values[0]
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(store.GetFiltered(filters))
+}
+
+
+===== FILE: ./server/api/logs.go =====
+package api
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+)
+
+const logDir = "/var/log/opslens-pulse"
+
+// LogsHandler is an HTTP handler for fetching logs
+func LogsHandler(w http.ResponseWriter, r *http.Request) {
+	file := r.URL.Query().Get("file")
+	if file == "" {
+		http.Error(w, "file is required", http.StatusBadRequest)
+		return
+	}
+
+	// Prevent directory traversal attacks
+	path := filepath.Join(logDir, filepath.Base(file))
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "cannot read log", http.StatusInternalServerError)
+		return
+	}
+
+	w.Write(content)
+}
+
+
+===== FILE: ./server/api/heartbeat.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func HeartbeatHandler(w http.ResponseWriter, r *http.Request) {
+	var hb shared.Heartbeat
+	if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+		http.Error(w, "invalid heartbeat", 400)
+		return
+	}
+
+	store.UpdateHeartbeat(hb.Hostname, time.Now())
+	w.WriteHeader(http.StatusOK)
+}
+
+
+===== FILE: ./server/main.go =====
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"opslense-pulse/server/api"
+	"opslense-pulse/server/config"
+	"opslense-pulse/shared"
+)
+
+const ServerVersion = "1.0.0"
+
+func printHelp() {
+	fmt.Print(`
+OpsLens-Pulse Server
+
+Usage:
+  opslens-pulse-server [options]
+
+Options:
+  --config <path>     Path to config file
+  --version           Show version
+  --help              Show help
+
+Defaults:
+  Linux:   /etc/opslens-pulse/server-config.yaml
+  Windows: C:\ProgramData\OpsLens-Pulse\server-config.yaml
+
+Env:
+  OPS_SERVER_CONFIG
+`)
+}
+
+// authMiddleware ensures requests have the correct token
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		expected := "Bearer " + api.GetAuthToken()
+		if authHeader != expected {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+		next(w, r)
+	}
+}
+
+func main() {
+	shared.InitLogger("server")
+	log.Println("🚀 OpsLens-Pulse Server starting...")
+
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Path to config file")
+	showHelp := flag.Bool("help", false, "Help")
+	showVersion := flag.Bool("version", false, "Version")
+	flag.Parse()
+
+	if *showHelp {
+		printHelp()
+		return
+	}
+	if *showVersion {
+		fmt.Println(ServerVersion)
+		return
+	}
+
+	// Load config first
+	cfg, path, created, err := config.LoadOrCreate(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("📄 Server config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Server config loaded from: %s\n", path)
+	}
+
+	// Validate config
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid server config: %v", err)
+	}
+
+	token := cfg.Token
+	if token == "" {
+		log.Fatal("Server token must be set in config file")
+	}
+	api.SetAuthToken(token)
+
+	// Static file server
+	http.Handle("/", http.FileServer(http.Dir("./server/ui/static")))
+
+	// API endpoints with auth
+	http.HandleFunc("/api/heartbeat", authMiddleware(api.HeartbeatHandler))
+	http.HandleFunc("/api/logs", authMiddleware(api.LogsHandler))
+	http.HandleFunc("/api/metrics", authMiddleware(api.MetricsHandler))
+	http.HandleFunc("/api/hosts", authMiddleware(api.HostsHandler))
+
+	addr := fmt.Sprintf(":%d", cfg.ListenPort)
+	log.Println("Server listening on", addr)
+
+	srv := &http.Server{Addr: addr}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Graceful shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
+	}
+	log.Println("Server stopped")
+}
+
+
+===== FILE: ./server/store/memory.go =====
+package store
+
+import (
+	"sync"
+	"time"
+
+	"opslense-pulse/shared"
+)
+
+type HostState struct {
+	Metrics  shared.HostMetrics
+	LastSeen time.Time
+	Logs     []string
+}
+
+var (
+	mu    sync.RWMutex // changed to RWMutex for better read performance
+	Hosts = make(map[string]*HostState)
+)
+
+func SaveMetrics(m shared.HostMetrics) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	h, ok := Hosts[m.Hostname]
+	if !ok {
+		h = &HostState{}
+		Hosts[m.Hostname] = h
+	}
+	h.Metrics = m
+}
+
+func UpdateHeartbeat(host string, t time.Time) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	h, ok := Hosts[host]
+	if !ok {
+		h = &HostState{}
+		Hosts[host] = h
+	}
+	h.LastSeen = t
+}
+
+func GetAll() []map[string]interface{} {
+	mu.Lock()
+	defer mu.Unlock()
+
+	now := time.Now()
+	out := []map[string]interface{}{}
+
+	for host, h := range Hosts {
+		alive := now.Sub(h.LastSeen) < 15*time.Second
+
+		out = append(out, map[string]interface{}{
+			"hostname":    host,
+			"os":          h.Metrics.OS,
+			"cpu_percent": h.Metrics.CPUPercent,
+			"mem_used_mb": h.Metrics.MemUsedMB,
+			"uptime_sec":  h.Metrics.UpTimeSec,
+			"last_seen":   h.LastSeen,
+			"alive":       alive,
+		})
+	}
+	return out
+}
+
+// SaveLog adds a log entry for a host
+func SaveLog(hostname string, log string) {
+	mu.Lock()
+	defer mu.Unlock()
+	h, ok := Hosts[hostname]
+	if !ok {
+		h = &HostState{}
+		Hosts[hostname] = h
+	}
+	h.Logs = append(h.Logs, log)
+}
+
+// GetLogs returns logs for a host
+func GetLogs(hostname string) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	h, ok := Hosts[hostname]
+	if !ok {
+		return []string{}
+	}
+	return h.Logs
+}
+
+func GetFiltered(tags map[string]string) []map[string]interface{} {
+	mu.Lock()
+	defer mu.Unlock()
+
+	now := time.Now()
+	out := []map[string]interface{}{}
+
+	for host, h := range Hosts {
+		if !matchTags(h.Metrics.Tags, tags) {
+			continue
+		}
+
+		alive := now.Sub(h.LastSeen) < 15*time.Second
+
+		out = append(out, map[string]interface{}{
+			"hostname":    host,
+			"os":          h.Metrics.OS,
+			"cpu_percent": h.Metrics.CPUPercent,
+			"mem_used_mb": h.Metrics.MemUsedMB,
+			"uptime_sec":  h.Metrics.UpTimeSec,
+			"last_seen":   h.LastSeen,
+			"alive":       alive,
+			"tags":        h.Metrics.Tags,
+		})
+	}
+	return out
+}
+
+func matchTags(hostTags, filters map[string]string) bool {
+	for k, v := range filters {
+		if hostTags == nil {
+			return false
+		}
+		if hostTags[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+
+===== FILE: ./agent/metrics/memory.go =====
+// agent/metrics/memory.go
+package metrics
+
+import "github.com/shirou/gopsutil/v3/mem"
+
+func Memory() (uint64, uint64) {
+	m, _ := mem.VirtualMemory()
+	return m.Total / 1024 / 1024, m.Used / 1024 / 1024
+}
+
+
+===== FILE: ./agent/metrics/cpu.go =====
+// agent/metrics/cpu.go
+package metrics
+
+import "github.com/shirou/gopsutil/v3/cpu"
+
+func CPUPercent() float64 {
+	p, err := cpu.Percent(0, false)
+	if err != nil || len(p) == 0 {
+		return 0
+	}
+	return p[0]
+}
+
+
+===== FILE: ./agent/metrics/host.go =====
+// agent/metrics/host.go
+package metrics
+
+import (
+	"github.com/shirou/gopsutil/v3/host"
+	"runtime"
+)
+
+func HostInfo() (string, uint64) {
+	h, _ := host.Info()
+	return runtime.GOOS, h.Uptime
+}
+
+
+===== FILE: ./agent/config/config.go =====
+package config
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ServerConfig struct {
+	URL   string `yaml:"url"`
+	Token string `yaml:"token"`
+}
+
+type AgentConfig struct {
+	IntervalSeconds int  `yaml:"interval_seconds"`
+	SelfUpgrade     bool `yaml:"self_upgrade"`
+}
+
+type Config struct {
+	Server ServerConfig      `yaml:"server"`
+	Agent  AgentConfig       `yaml:"agent"`
+	Tags   map[string]string `yaml:"tags"`
+}
+
+var DefaultPath string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		DefaultPath = `C:\ProgramData\OpsLens-Pulse\agent-config.yaml`
+	} else {
+		DefaultPath = "/etc/opslens-pulse/agent-config.yaml"
+	}
+}
+
+// LoadOrCreateConfig returns: Config, path, created(bool), error
+func LoadOrCreateConfig(path string) (Config, string, bool, error) {
+	var cfg Config
+	created := false
+
+	// Allow env ONLY to override config path
+	if env := os.Getenv("OPS_AGENT_CONFIG"); env != "" {
+		path = env
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+
+	// Create default config if missing
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg = defaultConfig()
+
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+
+		created = true
+		return cfg, path, created, nil
+	}
+
+	// Load existing config
+	f, err := os.Open(path)
+	if err != nil {
+		return cfg, path, false, err
+	}
+	defer f.Close()
+
+	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+		return cfg, path, false, err
+	}
+
+	return cfg, path, false, nil
+}
+
+func defaultConfig() Config {
+	return Config{
+		Server: ServerConfig{
+			URL:   "http://localhost:9898",
+			Token: "",
+		},
+		Agent: AgentConfig{
+			IntervalSeconds: 5,
+			SelfUpgrade:     false,
+		},
+		Tags: map[string]string{
+			"env": "dev",
+		},
+	}
+}
+
+func save(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := yaml.NewEncoder(f)
+	enc.SetIndent(2)
+	return enc.Encode(cfg)
+}
+
+func (c Config) Validate() error {
+	if c.Server.URL == "" {
+		return errors.New("server.url must be set")
+	}
+	if c.Server.Token == "" {
+		return errors.New("server.token must be set")
+	}
+	if c.Agent.IntervalSeconds <= 0 {
+		return errors.New("agent.interval_seconds must be > 0")
+	}
+	return nil
+}
+
+
+===== FILE: ./agent/sender/http.go =====
+package sender
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"opslense-pulse/shared"
+)
+
+// Send sends host metrics to server
+func Send(serverURL, token string, metrics shared.HostMetrics) error {
+	body, err := json.Marshal(metrics)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", serverURL+"/api/metrics", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SendHeartbeat sends heartbeat info
+func SendHeartbeat(serverURL, token string, hb shared.Heartbeat) error {
+	body, _ := json.Marshal(hb)
+
+	req, _ := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+
+===== FILE: ./agent/heartbeat/heartbeat.go =====
+package heartbeat
+
+import (
+	"time"
+
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+// Send sends a heartbeat to server
+func Send(serverURL, token, hostname string) error {
+	hb := shared.Heartbeat{
+		Hostname:  hostname,
+		Timestamp: time.Now(),
+	}
+
+	return sender.SendHeartbeat(serverURL, token, hb)
+}
+
+
+===== FILE: ./agent/logs/logs.go =====
+package logs
+
+import (
+	"os"
+)
+
+func Read(path string, lines int) string {
+	b, _ := os.ReadFile(path)
+	return string(b)
+}
+
+
+===== FILE: ./agent/containers/docker.go =====
+package containers
+
+import "github.com/shirou/gopsutil/v3/docker"
+
+type Container struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+func List() []Container {
+	stats, _ := docker.GetDockerStat()
+	var out []Container
+	for _, c := range stats {
+		out = append(out, Container{
+			ID:     c.ContainerID,
+			Name:   c.Name,
+			Status: c.Status,
+		})
+	}
+	return out
+}
+
+
+===== FILE: ./agent/main.go =====
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"runtime"
+	"time"
+
+	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/heartbeat"
+	"opslense-pulse/agent/metrics"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+const AgentVersion = "1.0.0"
+
+func printHelp() {
+	fmt.Print(`
+OpsLens-Pulse Agent
+
+Usage:
+  opslens-pulse-agent [options]
+
+Options:
+  --config <path>     Path to YAML config file
+  --version           Show version
+  --help              Show help
+
+Defaults:
+  Linux:   /etc/opslens-pulse/agent-config.yaml
+  Windows: C:\ProgramData\OpsLens-Pulse\agent-config.yaml
+
+Env:
+  OPS_AGENT_CONFIG
+`)
+}
+
+func main() {
+	shared.InitLogger("agent")
+	log.Println("🚀 OpsLens-Pulse Agent starting...")
+
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Config path")
+	showHelp := flag.Bool("help", false, "Help")
+	showVersion := flag.Bool("version", false, "Version")
+	flag.Parse()
+
+	if *showHelp {
+		printHelp()
+		return
+	}
+	if *showVersion {
+		fmt.Println(AgentVersion)
+		return
+	}
+
+	cfg, path, created, err := config.LoadOrCreateConfig(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("📄 Agent config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Agent config loaded from: %s\n", path)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
+	}
+
+	hostname, _ := os.Hostname()
+	serverURL := cfg.Server.URL
+	token := cfg.Server.Token
+
+	if serverURL == "" || token == "" {
+		log.Fatal("🌐 server.url and 🔐 server.token must be set in agent config")
+	}
+
+	for {
+		start := time.Now()
+
+		// Collect metrics
+		memTotal, memUsed := metrics.Memory()
+		osName, uptime := metrics.HostInfo()
+
+		m := shared.HostMetrics{
+			Hostname:   hostname,
+			OS:         osName,
+			Timestamp:  time.Now(),
+			Cores:      runtime.NumCPU(),
+			MemTotalMB: memTotal,
+			MemUsedMB:  memUsed,
+			UpTimeSec:  uptime,
+			CPUPercent: metrics.CPUPercent(),
+			Tags:       cfg.Tags,
+		}
+
+		// Send metrics
+		if err := sender.Send(serverURL, token, m); err != nil {
+			log.Println("Send failed:", err)
+		}
+
+		// Send heartbeat
+		if err := heartbeat.Send(serverURL, token, hostname); err != nil {
+			log.Println("Heartbeat failed:", err)
+		}
+
+		// Correct sleep to avoid drift
+		elapsed := time.Since(start)
+		sleep := time.Duration(cfg.Agent.IntervalSeconds)*time.Second - elapsed
+		if sleep > 0 {
+			time.Sleep(sleep)
+		}
+	}
+}
+
+
+===== FILE: ./shared/logger.go =====
+package shared
+
+import (
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime"
+)
+
+func InitLogger(component string) {
+	var logPath string
+
+	if runtime.GOOS == "windows" {
+		logPath = filepath.Join(
+			`C:\ProgramData\OpsLens-Pulse`,
+			component+".log",
+		)
+	} else {
+		logPath = filepath.Join(
+			"/var/log/opslens-pulse",
+			component+".log",
+		)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		log.Fatalf("Failed to create log dir: %v", err)
+	}
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("Failed to open log file: %v", err)
+	}
+
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	log.Printf("📝 Logging initialized → %s\n", logPath)
+}
+
+
+===== FILE: ./shared/model.go =====
+package shared
+
+import "time"
+
+type Heartbeat struct {
+	Hostname  string    `json:"hostname"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type HostMetrics struct {
+	Hostname   string            `json:"hostname"`
+	OS         string            `json:"os"`
+	Timestamp  time.Time         `json:"timestamp"`
+	Cores      int               `json:"cores"`
+	MemTotalMB uint64            `json:"mem_total_mb"`
+	UpTimeSec  uint64            `json:"uptime_sec"`
+	MemUsedMB  uint64            `json:"mem_used_mb"`
+	CPUPercent float64           `json:"cpu_percent"`
+	Tags       map[string]string `json:"tags"`
+}
+
+type ContainerInfo struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+
+===== FILE: ./release.sh =====
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =========================================
+# OpsLens Pulse Release Script — Production
+# =========================================
+# Builds Linux & Windows binaries, creates DEB packages,
+# generates SHA256 checksums, and validates builds.
+
+echo "📦 Starting OpsLens Pulse release..."
+
+# ---------------------------
+# Version handling
+# ---------------------------
+RAW_VERSION=${1:-${GITHUB_REF_NAME:-}}
+
+if [[ -z "$RAW_VERSION" ]]; then
+  echo "Usage: ./release.sh <version>"
+  exit 1
+fi
+
+VERSION=${RAW_VERSION#v}
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "❌ Invalid version format: $RAW_VERSION"
+  exit 1
+fi
+
+echo "📦 Building release version: $VERSION"
+
+# ---------------------------
+# Constants
+# ---------------------------
+AGENT_APP="opslens-pulse-agent"
+SERVER_APP="opslens-pulse-server"
+
+ROOT_DIR="$(pwd)"
+PACKAGE_DIR="$ROOT_DIR/package"
+BUILD_DIR="$PACKAGE_DIR/build"
+DIST_DIR="$PACKAGE_DIR/dist/releases"
+DEB_BUILD="$BUILD_DIR/deb"
+
+# ---------------------------
+# Prepare directories
+# ---------------------------
+echo "🧹 Cleaning and preparing directories..."
+rm -rf "$PACKAGE_DIR"
+mkdir -p "$BUILD_DIR" "$DIST_DIR" "$DEB_BUILD"
+
+# ---------------------------
+# Go modules tidy
+# ---------------------------
+echo "🧹 Tidying Go modules..."
+go mod tidy
+(cd agent && go mod tidy)
+(cd server && go mod tidy)
+
+# ---------------------------
+# Helper function: verify file exists
+# ---------------------------
+verify_file() {
+  if [ ! -f "$1" ]; then
+    echo "❌ Required file not found: $1"
+    exit 1
+  fi
+}
+
+# ---------------------------
+# Build function
+# ---------------------------
+build_go_binary() {
+  local target_dir="$1"
+  local output_name="$2"
+  local goos="$3"
+  local goarch="$4"
+
+  echo "🔨 Building $output_name for $goos/$goarch..."
+  GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -o "$target_dir/$output_name" || {
+    echo "❌ Build failed for $output_name ($goos/$goarch)"
+    exit 1
+  }
+  verify_file "$target_dir/$output_name"
+  echo "✅ $output_name built"
+}
+
+# ---------------------------
+# Linux builds
+# ---------------------------
+build_go_binary "$BUILD_DIR" "$AGENT_APP" linux amd64
+build_go_binary "$BUILD_DIR" "$SERVER_APP" linux amd64
+
+# ---------------------------
+# DEB packaging function
+# ---------------------------
+create_deb_package() {
+  local app_name="$1"
+  local version="$2"
+  local description="$3"
+
+  local pkg_dir="$DEB_BUILD/$app_name"
+  mkdir -p \
+    "$pkg_dir/DEBIAN" \
+    "$pkg_dir/usr/local/bin" \
+    "$pkg_dir/etc/opslens-pulse" \
+    "$pkg_dir/etc/systemd/system"
+
+  cp "$BUILD_DIR/$app_name" "$pkg_dir/usr/local/bin/"
+
+  # Control file
+  cat > "$pkg_dir/DEBIAN/control" <<EOF
+Package: $app_name
+Version: $version
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Vivek Bangare
+Description: $description
+EOF
+
+  # Systemd service
+  cat > "$pkg_dir/etc/systemd/system/$app_name.service" <<EOF
+[Unit]
+Description=$description
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/$app_name
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Default config
+  if [[ "$app_name" == "$AGENT_APP" ]]; then
+    cat > "$pkg_dir/etc/opslens-pulse/agent-config.yaml" <<EOF
+server:
+  url: "http://localhost:9898"
+  token: ""
+
+agent:
+  interval_seconds: 10
+  self_upgrade: false
+EOF
+  else
+    cat > "$pkg_dir/etc/opslens-pulse/server-config.yaml" <<EOF
+listen_port: 9898
+token: ""
+EOF
+  fi
+
+  # Build DEB
+  dpkg-deb --build "$pkg_dir"
+  local deb_file="$DIST_DIR/${app_name}_${version}_amd64.deb"
+  mv "$pkg_dir.deb" "$deb_file"
+  verify_file "$deb_file"
+  echo "✅ DEB package created: $deb_file"
+}
+
+# ---------------------------
+# Create DEBs
+# ---------------------------
+create_deb_package "$AGENT_APP" "$VERSION" "OpsLens Pulse Host Monitoring Agent"
+create_deb_package "$SERVER_APP" "$VERSION" "OpsLens Pulse Metrics Server"
+
+# ---------------------------
+# Windows builds
+# ---------------------------
+build_go_binary "$DIST_DIR" "${AGENT_APP}_${VERSION}_windows_amd64.exe" windows amd64
+build_go_binary "$DIST_DIR" "${SERVER_APP}_${VERSION}_windows_amd64.exe" windows amd64
+
+# ---------------------------
+# Checksums
+# ---------------------------
+echo "🔐 Generating SHA256 checksums..."
+cd "$DIST_DIR"
+sha256sum * > SHA256SUMS.txt
+verify_file "SHA256SUMS.txt"
+echo "✅ Checksums generated: SHA256SUMS.txt"
+
+# ---------------------------
+# Summary
+# ---------------------------
+echo ""
+echo "🎉 Release $RAW_VERSION built successfully!"
+echo "📦 Artifacts in $DIST_DIR:"
+ls -lh
+
+
+===== FILE: ./agent-config.yaml =====
+server:
+  url: http://server:9898
+  token: mysecrettoken
+agent:
+  interval_seconds: 5
+tags:
+  env: dev
+  region: us-west-1
+  role: go-agent
+

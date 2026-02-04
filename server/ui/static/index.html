@@ -1,52 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>OpsLens Pulse</title>
-
-  <!-- correct static path -->
-  <link rel="stylesheet" href="/styles.css" />
-
-  <style>
-    #login {
-      margin-bottom: 20px;
-    }
-    #login input {
-      padding: 6px;
-    }
-    #login button {
-      padding: 6px 10px;
-    }
-    #error {
-      color: red;
-      margin-top: 8px;
-    }
-  </style>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <h1>🖥️ OpsLens Pulse</h1>
 
-<h1>🖥️ OpsLens Pulse</h1>
+  <div class="controls">
+    <input type="text" id="searchInput" placeholder="Search hosts..." />
+    <select id="tagFilter">
+      <option value="">All Tags</option>
+    </select>
+    <button id="logoutBtn">Logout</button>
+  </div>
 
-<div id="login">
-  <input type="password" id="tokenInput" placeholder="Enter access token" />
-  <button onclick="login()">Login</button>
-  <div id="error"></div>
-</div>
+  <table id="hosts">
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>CPU</th>
+        <th>Memory</th>
+        <th>Tags</th>
+        <th>Status</th>
+        <th>Last Seen</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 
-<table id="hosts" style="display:none">
-  <thead>
-    <tr>
-      <th>Host</th>
-      <th>CPU</th>
-      <th>Memory</th>
-      <th>Status</th>
-      <th>Last Seen</th>
-    </tr>
-  </thead>
-  <tbody></tbody>
-</table>
-
-<!-- correct static path -->
-<script src="/script.js"></script>
+  <script src="/hosts.js"></script>
 </body>
 </html>

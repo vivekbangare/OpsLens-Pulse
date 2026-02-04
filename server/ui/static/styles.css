@@ -9,6 +9,52 @@ h1 {
   margin-bottom: 16px;
 }
 
+.login-container {
+  max-width: 400px;
+  margin: 100px auto;
+  padding: 20px;
+  background: #1e293b;
+  border-radius: 8px;
+}
+
+.login-container input {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: none;
+  border-radius: 4px;
+}
+
+.login-container button {
+  width: 100%;
+  padding: 10px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.login-container button:hover {
+  background: #1d4ed8;
+}
+
+.error {
+  color: #f87171;
+  margin-top: 8px;
+}
+
+.controls {
+  margin-bottom: 10px;
+}
+
+.controls input, .controls select, .controls button {
+  padding: 6px 10px;
+  margin-right: 8px;
+  border-radius: 4px;
+  border: none;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -28,7 +74,6 @@ th, td {
   color: #ef4444;
 }
 
-/* 🔴🟢 heartbeat dot */
 .dot {
   height: 10px;
   width: 10px;
@@ -46,9 +91,22 @@ th, td {
   background-color: #ef4444;
 }
 
-/* pulsing animation */
 @keyframes pulse {
   0%   { transform: scale(0.8); opacity: 0.7; }
   50%  { transform: scale(1.2); opacity: 1; }
   100% { transform: scale(0.8); opacity: 0.7; }
+}
+
+.tag {
+  display: inline-block;
+  background: #eef2ff;
+  color: #3730a3;
+  padding: 2px 6px;
+  margin: 2px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.tag-key {
+  font-weight: bold;
 }

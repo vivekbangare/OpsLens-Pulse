@@ -3,6 +3,7 @@ package sender
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -16,11 +17,7 @@ func Send(serverURL, token string, metrics shared.HostMetrics) error {
 		return err
 	}
 
-	req, err := http.NewRequest(
-		"POST",
-		serverURL+"/api/metrics",
-		bytes.NewBuffer(body),
-	)
+	req, err := http.NewRequest("POST", serverURL+"/api/metrics", bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
@@ -35,6 +32,9 @@ func Send(serverURL, token string, metrics shared.HostMetrics) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
 	return nil
 }
 
@@ -42,16 +42,20 @@ func Send(serverURL, token string, metrics shared.HostMetrics) error {
 func SendHeartbeat(serverURL, token string, hb shared.Heartbeat) error {
 	body, _ := json.Marshal(hb)
 
-	req, _ := http.NewRequest(
-		"POST",
-		serverURL+"/api/heartbeat",
-		bytes.NewBuffer(body),
-	)
-
+	req, _ := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	_, err := client.Do(req)
-	return err
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	return nil
 }

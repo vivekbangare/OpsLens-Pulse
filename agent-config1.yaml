@@ -1,0 +1,13 @@
+server:
+  url: http://server:9898
+  token: mysecrettoken
+agent:
+  interval_seconds: 5
+  self_upgrade: false
+  
+tags:
+  env: preprod
+  region: us-west-1
+  role: go-agent
+  name: agent-config1
+  owner: team-a

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,11 +62,22 @@ func save(path string, cfg ServerConfig) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
 	return yaml.NewEncoder(f).Encode(cfg)
+}
+
+func (c ServerConfig) Validate() error {
+	if c.ListenPort <= 0 || c.ListenPort > 65535 {
+		return errors.New("listen_port must be between 1 and 65535")
+	}
+	if c.Token == "" {
+		return errors.New("token must be set")
+	}
+	return nil
 }

@@ -11,23 +11,9 @@ import (
 	"opslense-pulse/shared"
 )
 
-// validateToken validates Authorization header using shared auth token
-func validateToken(r *http.Request) bool {
-	authHeader := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		return false
-	}
-
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	return token == GetAuthToken()
-}
-
 // MetricsHandler receives host metrics from agent
+
 func MetricsHandler(w http.ResponseWriter, r *http.Request) {
-	if !validateToken(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -48,16 +34,15 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 // HostsHandler returns all known hosts with metrics
 func HostsHandler(w http.ResponseWriter, r *http.Request) {
-	if !validateToken(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
 
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
+	filters := map[string]string{}
+	for key, values := range r.URL.Query() {
+		if strings.HasPrefix(key, "tag.") && len(values) > 0 {
+			tagKey := strings.TrimPrefix(key, "tag.")
+			filters[tagKey] = values[0]
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(store.GetAll())
+	json.NewEncoder(w).Encode(store.GetFiltered(filters))
 }

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"opslense-pulse/server/api"
 	"opslense-pulse/server/config"
@@ -42,7 +46,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		expected := "Bearer " + api.GetAuthToken()
 		if authHeader != expected {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte("Unauthorized"))
+			w.Write([]byte(`{"error":"unauthorized"}`))
 			return
 		}
 		next(w, r)
@@ -52,8 +56,9 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func main() {
 	shared.InitLogger("server")
 	log.Println("🚀 OpsLens-Pulse Server starting...")
+
 	var configPath string
-	flag.StringVar(&configPath, "config", "", "Config path")
+	flag.StringVar(&configPath, "config", "", "Path to config file")
 	showHelp := flag.Bool("help", false, "Help")
 	showVersion := flag.Bool("version", false, "Version")
 	flag.Parse()
@@ -67,6 +72,7 @@ func main() {
 		return
 	}
 
+	// Load config first
 	cfg, path, created, err := config.LoadOrCreate(configPath)
 	if err != nil {
 		log.Fatal(err)
@@ -77,14 +83,17 @@ func main() {
 		log.Printf("📄 Server config loaded from: %s\n", path)
 	}
 
-	token := os.Getenv("SERVER_TOKEN")
-	if token != "" {
-		log.Println("🔐 Server token loaded from environment variable")
-	} else {
-		log.Println("🔐 Server token loaded from config file")
-		token = cfg.Token
+	// Validate config
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid server config: %v", err)
+	}
+
+	token := cfg.Token
+	if token == "" {
+		log.Fatal("Server token must be set in config file")
 	}
 	api.SetAuthToken(token)
+
 	// Static file server
 	http.Handle("/", http.FileServer(http.Dir("./server/ui/static")))
 
@@ -96,5 +105,26 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", cfg.ListenPort)
 	log.Println("Server listening on", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+
+	srv := &http.Server{Addr: addr}
+
+	// Start server in a goroutine
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Graceful shutdown
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
+	}
+	log.Println("Server stopped")
 }

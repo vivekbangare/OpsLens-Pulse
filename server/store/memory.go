@@ -14,7 +14,7 @@ type HostState struct {
 }
 
 var (
-	mu    sync.Mutex
+	mu    sync.RWMutex // changed to RWMutex for better read performance
 	Hosts = make(map[string]*HostState)
 )
 
@@ -86,4 +86,44 @@ func GetLogs(hostname string) []string {
 		return []string{}
 	}
 	return h.Logs
+}
+
+func GetFiltered(tags map[string]string) []map[string]interface{} {
+	mu.Lock()
+	defer mu.Unlock()
+
+	now := time.Now()
+	out := []map[string]interface{}{}
+
+	for host, h := range Hosts {
+		if !matchTags(h.Metrics.Tags, tags) {
+			continue
+		}
+
+		alive := now.Sub(h.LastSeen) < 15*time.Second
+
+		out = append(out, map[string]interface{}{
+			"hostname":    host,
+			"os":          h.Metrics.OS,
+			"cpu_percent": h.Metrics.CPUPercent,
+			"mem_used_mb": h.Metrics.MemUsedMB,
+			"uptime_sec":  h.Metrics.UpTimeSec,
+			"last_seen":   h.LastSeen,
+			"alive":       alive,
+			"tags":        h.Metrics.Tags,
+		})
+	}
+	return out
+}
+
+func matchTags(hostTags, filters map[string]string) bool {
+	for k, v := range filters {
+		if hostTags == nil {
+			return false
+		}
+		if hostTags[k] != v {
+			return false
+		}
+	}
+	return true
 }
