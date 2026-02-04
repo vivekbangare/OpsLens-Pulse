@@ -12,7 +12,7 @@ if [ -z "$RAW_VERSION" ]; then
   exit 1
 fi
 
-# Strip leading 'v' for Debian packages
+# Strip leading 'v'
 VERSION=${RAW_VERSION#v}
 
 # Validate version format
@@ -22,13 +22,14 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+echo "📦 Building release version: $VERSION"
+
 AGENT_APP=opslens-pulse-agent
 SERVER_APP=opslens-pulse-server
 PACKAGE_DIR=package
 BUILD=$PACKAGE_DIR/build
 DIST=$PACKAGE_DIR/dist/releases
 
-# Clean previous outputs
 rm -rf $PACKAGE_DIR
 mkdir -p $BUILD $DIST
 
@@ -46,14 +47,12 @@ go mod tidy
 echo "🔧 Building Linux agent..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
 go build -o $BUILD/$AGENT_APP ./agent
-
-[ -f "$BUILD/$AGENT_APP" ] || { echo "❌ Linux agent build failed!"; exit 1; }
+[ -f "$BUILD/$AGENT_APP" ] || { echo "❌ Linux agent build failed"; exit 1; }
 
 echo "🔧 Building Linux server..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
 go build -o $BUILD/$SERVER_APP ./server
-
-[ -f "$BUILD/$SERVER_APP" ] || { echo "❌ Linux server build failed!"; exit 1; }
+[ -f "$BUILD/$SERVER_APP" ] || { echo "❌ Linux server build failed"; exit 1; }
 
 # ---------------------------
 # Create DEB package for agent
@@ -105,15 +104,33 @@ EOF
 
 dpkg-deb --build $PKG
 mv $BUILD/deb/$AGENT_APP.deb $DIST/${AGENT_APP}_${VERSION}_amd64.deb
-echo "✅ DEB package for agent created"
+echo "✅ DEB agent package created"
 
 # ---------------------------
 # Build Windows agent
 # ---------------------------
 echo "🪟 Building Windows agent..."
-(cd agent && GOOS=windows GOARCH=amd64 \
-go build -o ../../$DIST/${AGENT_APP}_${RAW_VERSION}_windows_amd64.exe)
+(cd agent && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+go build -o ../../$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe)
 
+[ -f "$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe" ] \
+  || { echo "❌ Windows agent build failed"; exit 1; }
+
+# Windows config
+WIN_CONFIG_DIR="$DIST/WindowsConfig"
+mkdir -p "$WIN_CONFIG_DIR"
+
+cat > "$WIN_CONFIG_DIR/agent-config.yaml" <<EOF
+server:
+  url: "http://localhost:9898"
+  token: ""
+
+agent:
+  interval_seconds: 10
+  self_upgrade: false
+EOF
+
+# Windows installer
 WIN_INSTALL_SCRIPT="$DIST/install-windows-agent.ps1"
 cat > "$WIN_INSTALL_SCRIPT" <<'EOF'
 param(
@@ -121,7 +138,7 @@ param(
 )
 
 $SourceDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$AgentExe = Join-Path $SourceDir "opslens-pulse-agent.exe"
+$AgentExe = Get-ChildItem $SourceDir -Filter "opslens-pulse-agent_*_windows_amd64.exe" | Select-Object -First 1
 $ConfigSrc = Join-Path $SourceDir "WindowsConfig\agent-config.yaml"
 
 if ($ConfigPath -eq "") {
@@ -131,20 +148,23 @@ if ($ConfigPath -eq "") {
 }
 
 New-Item -ItemType Directory -Path $ConfigDestDir -Force | Out-Null
-
 Copy-Item $ConfigSrc (Join-Path $ConfigDestDir "agent-config.yaml") -Force
-Copy-Item $AgentExe (Join-Path $ConfigDestDir "opslens-pulse-agent.exe") -Force
+Copy-Item $AgentExe.FullName (Join-Path $ConfigDestDir "opslens-pulse-agent.exe") -Force
 
 Write-Host "✅ OpsLens agent installed at $ConfigDestDir"
 EOF
-echo "✅ Windows agent install script created at $WIN_INSTALL_SCRIPT"
+
+echo "✅ Windows agent installer created"
 
 # ---------------------------
 # Build Windows server
 # ---------------------------
 echo "🪟 Building Windows server..."
-(cd server && GOOS=windows GOARCH=amd64 \
-go build -o ../../$DIST/${SERVER_APP}_${RAW_VERSION}_windows_amd64.exe)
+(cd server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+go build -o ../../$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe)
+
+[ -f "$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe" ] \
+  || { echo "❌ Windows server build failed"; exit 1; }
 
 # ---------------------------
 # Create DEB package for server
@@ -191,7 +211,7 @@ EOF
 
 dpkg-deb --build $PKG_SRV
 mv $BUILD/deb/$SERVER_APP.deb $DIST/${SERVER_APP}_${VERSION}_amd64.deb
-echo "✅ DEB package for server created"
+echo "✅ DEB server package created"
 
 # ---------------------------
 # Checksums
@@ -201,3 +221,4 @@ sha256sum * > SHA256SUMS.txt
 echo "✅ SHA256SUMS.txt created"
 
 echo "🎉 Release $RAW_VERSION built successfully!"
+echo "Artifacts are located in the '$DIST' directory."
