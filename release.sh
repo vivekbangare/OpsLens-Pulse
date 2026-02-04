@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-VERSION=$1
+VERSION=${1:-${GITHUB_REF_NAME}}
 if [ -z "$VERSION" ]; then
   echo "Usage: ./release.sh <version>"
   exit 1
@@ -209,3 +209,8 @@ echo "✅ DEB package for server created"
 
 
 echo "🎉 Release $VERSION built successfully!"
+
+cd $DIST
+
+sha256sum * > SHA256SUMS.txt
+echo "✅ SHA256SUMS.txt created"
