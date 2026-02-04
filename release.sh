@@ -10,7 +10,6 @@ RAW_VERSION=${1:-${GITHUB_REF_NAME}}
 
 if [ -z "$RAW_VERSION" ]; then
   echo "Usage: ./release.sh <version>"
-  echo "Example: ./release.sh v1.0.0"
   exit 1
 fi
 
@@ -29,11 +28,10 @@ echo "📦 Building release version: $VERSION"
 AGENT_APP=opslens-pulse-agent
 SERVER_APP=opslens-pulse-server
 
-PACKAGE_DIR=package
-BUILD=$PACKAGE_DIR/build
-DIST=$PACKAGE_DIR/dist/releases
-
 ROOT_DIR="$(pwd)"
+PACKAGE_DIR="$ROOT_DIR/package"
+BUILD="$PACKAGE_DIR/build"
+DIST="$PACKAGE_DIR/dist/releases"
 
 # ---------------------------
 # Clean & prepare dirs
@@ -173,12 +171,12 @@ mv "$BUILD/deb/$SERVER_APP.deb" \
 echo "✅ Server DEB created"
 
 # ==========================================================
-# WINDOWS BUILDS (LAST — FIXED)
+# WINDOWS BUILDS (LAST — VERIFIED)
 # ==========================================================
 echo "🪟 Building Windows agent..."
 cd agent
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-go build -o "../$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe"
+go build -o "$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe"
 cd "$ROOT_DIR"
 
 [ -f "$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe" ] \
@@ -189,7 +187,7 @@ echo "✅ Windows agent EXE created"
 echo "🪟 Building Windows server..."
 cd server
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-go build -o "../$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe"
+go build -o "$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe"
 cd "$ROOT_DIR"
 
 [ -f "$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe" ] \
@@ -206,9 +204,6 @@ sha256sum * > SHA256SUMS.txt
 
 echo "✅ SHA256SUMS.txt created"
 
-# ---------------------------
-# Summary
-# ---------------------------
 echo ""
 echo "🎉 Release $RAW_VERSION built successfully!"
 echo "📦 Artifacts:"
