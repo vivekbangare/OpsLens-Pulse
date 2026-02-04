@@ -14,13 +14,10 @@ if [ -z "$RAW_VERSION" ]; then
   exit 1
 fi
 
-# Strip leading 'v' for Debian packages
 VERSION=${RAW_VERSION#v}
 
-# Validate version format
 if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "❌ Invalid version format: $RAW_VERSION"
-  echo "Expected: vX.Y.Z or X.Y.Z"
   exit 1
 fi
 
@@ -36,6 +33,8 @@ PACKAGE_DIR=package
 BUILD=$PACKAGE_DIR/build
 DIST=$PACKAGE_DIR/dist/releases
 
+ROOT_DIR="$(pwd)"
+
 # ---------------------------
 # Clean & prepare dirs
 # ---------------------------
@@ -50,27 +49,31 @@ go mod tidy
 (cd agent && go mod tidy)
 (cd server && go mod tidy)
 
-# ---------------------------
-# Build Linux binaries
-# ---------------------------
-echo "🔧 Building Linux agent..."
+# ==========================================================
+# LINUX BUILDS (FIRST)
+# ==========================================================
+echo "🐧 Building Linux agent..."
+cd agent
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-go build -o "$BUILD/$AGENT_APP" ./agent
+go build -o "$BUILD/$AGENT_APP"
+cd "$ROOT_DIR"
 
 [ -f "$BUILD/$AGENT_APP" ] || { echo "❌ Linux agent build failed"; exit 1; }
 
-echo "🔧 Building Linux server..."
+echo "🐧 Building Linux server..."
+cd server
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
-go build -o "$BUILD/$SERVER_APP" ./server
+go build -o "$BUILD/$SERVER_APP"
+cd "$ROOT_DIR"
 
 [ -f "$BUILD/$SERVER_APP" ] || { echo "❌ Linux server build failed"; exit 1; }
 
-# ---------------------------
-# Create DEB package (agent)
-# ---------------------------
+# ==========================================================
+# DEB PACKAGE — AGENT
+# ==========================================================
 echo "📦 Creating DEB package for agent..."
-PKG_AGENT="$BUILD/deb/$AGENT_APP"
 
+PKG_AGENT="$BUILD/deb/$AGENT_APP"
 mkdir -p \
   "$PKG_AGENT/DEBIAN" \
   "$PKG_AGENT/usr/local/bin" \
@@ -115,43 +118,17 @@ agent:
 EOF
 
 dpkg-deb --build "$PKG_AGENT"
-mv "$BUILD/deb/$AGENT_APP.deb" "$DIST/${AGENT_APP}_${VERSION}_amd64.deb"
+mv "$BUILD/deb/$AGENT_APP.deb" \
+   "$DIST/${AGENT_APP}_${VERSION}_amd64.deb"
 
 echo "✅ Agent DEB created"
 
-# ---------------------------
-# Build Windows agent
-# ---------------------------
-echo "🪟 Building Windows agent..."
-mkdir -p "$DIST"
-
-(cd agent && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-go build -o "../../$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe")
-
-[ -f "$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe" ] \
-  || { echo "❌ Windows agent build failed"; exit 1; }
-
-echo "✅ Windows agent EXE created"
-
-# ---------------------------
-# Build Windows server
-# ---------------------------
-echo "🪟 Building Windows server..."
-
-(cd server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-go build -o "../../$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe")
-
-[ -f "$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe" ] \
-  || { echo "❌ Windows server build failed"; exit 1; }
-
-echo "✅ Windows server EXE created"
-
-# ---------------------------
-# Create DEB package (server)
-# ---------------------------
+# ==========================================================
+# DEB PACKAGE — SERVER
+# ==========================================================
 echo "📦 Creating DEB package for server..."
-PKG_SERVER="$BUILD/deb/$SERVER_APP"
 
+PKG_SERVER="$BUILD/deb/$SERVER_APP"
 mkdir -p \
   "$PKG_SERVER/DEBIAN" \
   "$PKG_SERVER/usr/local/bin" \
@@ -190,13 +167,39 @@ token: ""
 EOF
 
 dpkg-deb --build "$PKG_SERVER"
-mv "$BUILD/deb/$SERVER_APP.deb" "$DIST/${SERVER_APP}_${VERSION}_amd64.deb"
+mv "$BUILD/deb/$SERVER_APP.deb" \
+   "$DIST/${SERVER_APP}_${VERSION}_amd64.deb"
 
 echo "✅ Server DEB created"
 
-# ---------------------------
-# Checksums
-# ---------------------------
+# ==========================================================
+# WINDOWS BUILDS (LAST — FIXED)
+# ==========================================================
+echo "🪟 Building Windows agent..."
+cd agent
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+go build -o "../$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe"
+cd "$ROOT_DIR"
+
+[ -f "$DIST/${AGENT_APP}_${VERSION}_windows_amd64.exe" ] \
+  || { echo "❌ Windows agent build failed"; exit 1; }
+
+echo "✅ Windows agent EXE created"
+
+echo "🪟 Building Windows server..."
+cd server
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+go build -o "../$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe"
+cd "$ROOT_DIR"
+
+[ -f "$DIST/${SERVER_APP}_${VERSION}_windows_amd64.exe" ] \
+  || { echo "❌ Windows server build failed"; exit 1; }
+
+echo "✅ Windows server EXE created"
+
+# ==========================================================
+# CHECKSUMS
+# ==========================================================
 echo "🔐 Generating checksums..."
 cd "$DIST"
 sha256sum * > SHA256SUMS.txt
