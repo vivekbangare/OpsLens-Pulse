@@ -1,10 +1,10 @@
 const tbody = document.querySelector("#hosts tbody")
 const searchInput = document.getElementById("searchInput")
-const tagFilter = document.getElementById("tagFilter")
+const tagFilterInput = document.getElementById("tagFilterInput")
 const logoutBtn = document.getElementById("logoutBtn")
 
 // redirect if not logged in
-if (!sessionStorage.getItem("loggedIn")) window.location.href = "/login.html"
+if (!sessionStorage.getItem("loggedIn")) window.location.href = "/index.html"
 
 let hostsData = []
 const API_TOKEN = "mysecrettoken"; // use the token that works
@@ -24,54 +24,71 @@ function renderTags(tags) {
     .join("")
 }
 
-function renderHosts(data) {
+function renderHostsList(data) {
   tbody.innerHTML = ""
   data.forEach(h => {
     const tr = document.createElement("tr")
     tr.innerHTML = `
-      <td>${h.hostname}</td>
-      <td>${h.cpu_percent.toFixed(1)}%</td>
-      <td>${h.mem_used_mb} MB</td>
-      <td>${renderTags(h.tags)}</td>
+      <td class="hostname">${h.hostname}</td>
       <td class="${h.alive ? "alive" : "dead"}">${h.alive ? "Alive" : "Down"}</td>
       <td>${timeAgo(h.last_seen)}</td>
     `
     tbody.appendChild(tr)
+
+    tr.querySelector(".hostname").addEventListener("click", () => showDetails(h))
   })
 }
 
-function populateTagFilter() {
-  const allTags = new Set()
-  hostsData.forEach(h => {
-    if (h.tags) Object.keys(h.tags).forEach(t => allTags.add(t))
-  })
-  tagFilter.innerHTML = '<option value="">All Tags</option>'
-  allTags.forEach(tag => {
-    const opt = document.createElement("option")
-    opt.value = tag
-    opt.textContent = tag
-    tagFilter.appendChild(opt)
-  })
+function showDetails(host) {
+  document.getElementById("hosts").style.display = "none"
+  document.getElementById("hostDetails").style.display = "block"
+
+  document.getElementById("detailsHostname").textContent = host.hostname
+  document.getElementById("detailsIP").textContent = host.ip || "—"
+  document.getElementById("detailsOS").textContent = host.os
+  document.getElementById("detailsCPU").textContent = host.cpu_percent.toFixed(1)
+  document.getElementById("detailsMem").textContent = host.mem_used_mb
+  document.getElementById("detailsUptime").textContent = host.uptime_sec
+  document.getElementById("detailsTags").innerHTML = renderTags(host.tags)
 }
 
+document.getElementById("backBtn").addEventListener("click", () => {
+  document.getElementById("hostDetails").style.display = "none"
+  document.getElementById("hosts").style.display = "table"
+})
+
+// Filtering logic by hostname and tag key=value
 function applyFilter() {
-  const search = searchInput.value.toLowerCase()
-  const selectedTag = tagFilter.value
+  const search = searchInput.value.toLowerCase().trim()
+  const tagFilter = tagFilterInput.value.trim() // format: key=value
 
   const filtered = hostsData.filter(h => {
+    // Check hostname match
     const matchesSearch = h.hostname.toLowerCase().includes(search)
-    const matchesTag = !selectedTag || (h.tags && selectedTag in h.tags)
+
+    // Check tag filter
+    let matchesTag = true
+    if (tagFilter) {
+      const [key, value] = tagFilter.split('=')
+      if (!key || !value || !h.tags) {
+        matchesTag = false
+      } else {
+        matchesTag = h.tags[key] === value
+      }
+    }
+
     return matchesSearch && matchesTag
   })
-  renderHosts(filtered)
+
+  renderHostsList(filtered)
 }
 
 searchInput.addEventListener("input", applyFilter)
-tagFilter.addEventListener("change", applyFilter)
+tagFilterInput.addEventListener("input", applyFilter)
 
 logoutBtn.addEventListener("click", () => {
   sessionStorage.removeItem("loggedIn")
-  window.location.href = "/login.html"
+  window.location.href = "/index.html"
 })
 
 function loadHosts() {
@@ -86,11 +103,11 @@ function loadHosts() {
     })
     .then(data => {
       hostsData = data
-      populateTagFilter() // only once per fetch
-      applyFilter()
+      applyFilter() // apply filter immediately after fetch
     })
     .catch(err => console.error("Failed to load hosts:", err))
 }
 
+// Initial load and periodic refresh
 loadHosts()
 setInterval(loadHosts, 5000)

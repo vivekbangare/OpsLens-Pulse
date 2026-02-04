@@ -9,7 +9,7 @@ loginBtn.addEventListener("click", () => {
 
   if (username === "admin" && password === "admin@2026") {
     sessionStorage.setItem("loggedIn", "true")
-    window.location.href = "/index.html"
+    window.location.href = "/hosts.html"
   } else {
     errorBox.textContent = "Invalid username or password"
   }
@@ -17,5 +17,5 @@ loginBtn.addEventListener("click", () => {
 
 // auto-redirect if already logged in
 if (sessionStorage.getItem("loggedIn")) {
-  window.location.href = "/index.html"
+  window.location.href = "/hosts.html"
 }

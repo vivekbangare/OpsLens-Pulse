@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>OpsLens Pulse</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <h1>🖥️ OpsLens Pulse</h1>
+
+  <div class="controls">
+    <!-- Input for filtering by hostname -->
+    <input type="text" id="searchInput" placeholder="Search hosts..." />
+    
+    <!-- Input for filtering by tag (key=value) -->
+    <input type="text" id="tagFilterInput" placeholder="Filter by tag (env=prod)" />
+    
+    <button id="logoutBtn">Logout</button>
+  </div>
+
+  <table id="hosts">
+    <thead>
+      <tr>
+        <th>Hostname</th>
+        <th>Status</th>
+        <th>Last Seen</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="hostDetails" style="display:none">
+    <h2 id="detailsHostname"></h2>
+    <p><strong>IP:</strong> <span id="detailsIP"></span></p>
+    <p><strong>OS:</strong> <span id="detailsOS"></span></p>
+    <p><strong>CPU:</strong> <span id="detailsCPU"></span>%</p>
+    <p><strong>Memory:</strong> <span id="detailsMem"></span> MB</p>
+    <p><strong>Uptime:</strong> <span id="detailsUptime"></span> sec</p>
+    <p><strong>Tags:</strong> <span id="detailsTags"></span></p>
+    <button id="backBtn">Back</button>
+  </div>
+
+  <script src="/static/hosts.js"></script>
+</body>
+</html>
