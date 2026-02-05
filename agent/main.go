@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	"time"
@@ -37,6 +38,44 @@ Env:
   OPS_AGENT_CONFIG
 `)
 }
+
+func getLocalIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range ifaces {
+		// ignore loopback & down interfaces
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+
+			return ip.String() // return first valid IPv4
+		}
+	}
+
+	return ""
+}
+
 
 func main() {
 	shared.InitLogger("agent")
@@ -96,6 +135,7 @@ func main() {
 			UpTimeSec:  uptime,
 			CPUPercent: metrics.CPUPercent(),
 			Tags:       cfg.Tags,
+			IP:         getLocalIP(),
 		}
 
 		// Send metrics

@@ -17,6 +17,7 @@ type HostMetrics struct {
 	MemUsedMB  uint64            `json:"mem_used_mb"`
 	CPUPercent float64           `json:"cpu_percent"`
 	Tags       map[string]string `json:"tags"`
+	IP         string            `json:"ip"`
 }
 
 type ContainerInfo struct {
