@@ -1,29 +1,29 @@
-# OpsLens-Pulse
-OpsLens Pulse - Cross-platform monitoring for hosts, containers, and services on Linux &amp; Windows. Provides real-time metrics via agents. Lightweight, expandable, and visualixed through a built-in dashboard.
+# OpsLens Pulse 🚀
 
-### Install result on Linux host
+OpsLens Pulse is a lightweight host monitoring and heartbeat system built with Go.
+It uses a server–agent architecture to collect system metrics, track host availability,
+and display everything in a simple web UI.
 
-```
-sudo dpkg -i opslens-agent_1.0.0_amd64.deb
-sudo systemctl enable opslens-agent
-sudo systemctl start opslens-agent
-```
+## Key Highlights
+- Lightweight & fast
+- Easy to deploy
+- Token-secured APIs
+- Linux & Windows support
+- Installer-ready packages
 
-### 
+## Documentation
+- [Architecture](docs/architecture.md)
+- [Security Model](docs/security.md)
+- [Roadmap](docs/roadmap.md)
 
-#### Usage on Windows:
+## Components
+- [Server Documentation](docs/server/README.md)
+- [Agent Documentation](docs/agent/README.md)
 
-```
-.\install.ps1
-```
+## Installation
+- [Linux Installation](docs/install/linux.md)
+- [Windows Installation](docs/install/windows.md)
 
-
-docker build -t deb-builder -f Dockerfile.deb .
-
-docker run --rm \
-  -v "$(pwd)":/build \
-  -w /build \
-  deb-builder \
-  ./release.sh 1.0.0
-
-curl -H "Authorization: Bearer mysecrettoken" http://localhost:9898/api/hosts
+## Author
+**Vivek Bangare**  
+Lead DevOps Engineer
