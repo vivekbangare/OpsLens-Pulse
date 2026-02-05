@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"strings"
 
 	"opslense-pulse/server/api"
 	"opslense-pulse/server/config"
@@ -94,8 +95,20 @@ func main() {
 	}
 	api.SetAuthToken(token)
 
-	// Static file server
-	http.Handle("/", http.FileServer(http.Dir("./server/ui/static")))
+	// 1. Serve static assets (CSS, JS)
+	fs := http.FileServer(http.Dir("./server/ui/static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
+
+	// 2. Serve HTML pages and hide .html in URLs
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		} else if !strings.HasSuffix(path, ".html") {
+			path = path + ".html"
+		}
+		http.ServeFile(w, r, "./server/ui/static"+path)
+	})
 
 	// API endpoints with auth
 	http.HandleFunc("/api/heartbeat", authMiddleware(api.HeartbeatHandler))

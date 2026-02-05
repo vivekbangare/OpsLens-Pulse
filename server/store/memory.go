@@ -1,22 +1,36 @@
 package store
 
 import (
+	"net"
+	"opslense-pulse/shared"
 	"sync"
 	"time"
-
-	"opslense-pulse/shared"
 )
 
 type HostState struct {
 	Metrics  shared.HostMetrics
 	LastSeen time.Time
 	Logs     []string
+	IP       string // new field
 }
 
 var (
 	mu    sync.RWMutex // changed to RWMutex for better read performance
 	Hosts = make(map[string]*HostState)
 )
+
+func getHostIP(hostname string) string {
+	addrs, err := net.LookupIP(hostname)
+	if err != nil || len(addrs) == 0 {
+		return ""
+	}
+	for _, addr := range addrs {
+		if addr.To4() != nil {
+			return addr.String()
+		}
+	}
+	return ""
+}
 
 func SaveMetrics(m shared.HostMetrics) {
 	mu.Lock()
@@ -28,6 +42,12 @@ func SaveMetrics(m shared.HostMetrics) {
 		Hosts[m.Hostname] = h
 	}
 	h.Metrics = m
+	// Save IP from HostMetrics
+	if m.IP != "" {
+		h.IP = m.IP
+	} else if ip, ok := m.Tags["ip"]; ok {
+		h.IP = ip
+	}
 }
 
 func UpdateHeartbeat(host string, t time.Time) {
@@ -103,14 +123,16 @@ func GetFiltered(tags map[string]string) []map[string]interface{} {
 		alive := now.Sub(h.LastSeen) < 15*time.Second
 
 		out = append(out, map[string]interface{}{
-			"hostname":    host,
-			"os":          h.Metrics.OS,
-			"cpu_percent": h.Metrics.CPUPercent,
-			"mem_used_mb": h.Metrics.MemUsedMB,
-			"uptime_sec":  h.Metrics.UpTimeSec,
-			"last_seen":   h.LastSeen,
-			"alive":       alive,
-			"tags":        h.Metrics.Tags,
+			"hostname":     host,
+			"ip":           h.IP,
+			"os":           h.Metrics.OS,
+			"cpu_percent":  h.Metrics.CPUPercent,
+			"mem_used_mb":  h.Metrics.MemUsedMB,
+			"mem_total_mb": h.Metrics.MemTotalMB,
+			"uptime_sec":   h.Metrics.UpTimeSec,
+			"last_seen":    h.LastSeen,
+			"alive":        alive,
+			"tags":         h.Metrics.Tags,
 		})
 	}
 	return out
