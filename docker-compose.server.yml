@@ -1,0 +1,49 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: opslens-clickhouse
+    networks:
+      - opslens-net
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DB=opslens
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  server:
+    image: golang:1.24
+    container_name: opslens-server
+    working_dir: /app
+    networks:
+      - opslens-net
+    ports:
+      - "9898:9898"
+    volumes:
+      - ./:/app
+      - ./server-config.yaml:/etc/opslens-pulse/server-config.yaml
+    command: go run server/main.go
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DATABASE=opslens
+    depends_on:
+      - clickhouse
+
+networks:
+  opslens-net:
+    external: true
+
+volumes:
+  clickhouse-data:

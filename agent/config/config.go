@@ -11,7 +11,7 @@ import (
 
 type ServerConfig struct {
 	URL   string `yaml:"url"`
-	Token string `yaml:"token"`
+	APIKey string `yaml:"api_key"`
 }
 
 type AgentConfig struct {
@@ -78,7 +78,7 @@ func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
 			URL:   "http://localhost:9898",
-			Token: "",
+			APIKey: "",
 		},
 		Agent: AgentConfig{
 			IntervalSeconds: 5,
@@ -111,8 +111,8 @@ func (c Config) Validate() error {
 	if c.Server.URL == "" {
 		return errors.New("server.url must be set")
 	}
-	if c.Server.Token == "" {
-		return errors.New("server.token must be set")
+	if c.Server.APIKey == "" {
+		return errors.New("server.api_key must be set")
 	}
 	if c.Agent.IntervalSeconds <= 0 {
 		return errors.New("agent.interval_seconds must be > 0")

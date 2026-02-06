@@ -2,12 +2,9 @@ package shared
 
 import "time"
 
-type Heartbeat struct {
-	Hostname  string    `json:"hostname"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
 type HostMetrics struct {
+	AccountID  string            `json:"account_id"`
+	AgentID    string            `json:"agent_id"`
 	Hostname   string            `json:"hostname"`
 	OS         string            `json:"os"`
 	Timestamp  time.Time         `json:"timestamp"`
@@ -24,4 +21,11 @@ type ContainerInfo struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Status string `json:"status"`
+}
+
+type Heartbeat struct {
+	AccountID string    `json:"account_id"`
+	AgentID   string    `json:"agent_id"`
+	Hostname  string    `json:"hostname"`
+	Timestamp time.Time `json:"timestamp"`
 }

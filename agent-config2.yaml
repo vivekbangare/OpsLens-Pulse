@@ -1,6 +1,6 @@
 server:
   url: http://server:9898
-  token: mysecrettoken
+  api_key: opl_445230515cedb751d410dce137df59865bf567309fcc4c028381c0f1cd719af8
 agent:
   interval_seconds: 5
   self_upgrade: false

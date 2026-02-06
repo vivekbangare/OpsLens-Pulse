@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,8 +11,34 @@ import (
 )
 
 type ServerConfig struct {
-	ListenPort int    `yaml:"listen_port"`
-	Token      string `yaml:"token"`
+	ListenPort int `yaml:"listen_port"`
+}
+
+type ClickHouseConfig struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+}
+
+func LoadClickHouse() ClickHouseConfig {
+	cfg := ClickHouseConfig{
+		Host:     os.Getenv("CLICKHOUSE_HOST"),
+		Port:     9000,
+		User:     os.Getenv("CLICKHOUSE_USER"),
+		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
+		Database: os.Getenv("CLICKHOUSE_DATABASE"),
+	}
+	if port := os.Getenv("CLICKHOUSE_PORT"); port != "" {
+		fmt.Sscanf(port, "%d", &cfg.Port)
+	}
+	return cfg
+}
+
+func (c ClickHouseConfig) DSN() string {
+	return fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s",
+		c.Host, c.Port, c.User, c.Password, c.Database)
 }
 
 var DefaultPath string
@@ -39,7 +66,6 @@ func LoadOrCreate(path string) (ServerConfig, string, bool, error) {
 		// create default config
 		cfg = ServerConfig{
 			ListenPort: 9898,
-			Token:      "",
 		}
 		if err := save(path, cfg); err != nil {
 			return cfg, path, false, err
@@ -75,9 +101,6 @@ func save(path string, cfg ServerConfig) error {
 func (c ServerConfig) Validate() error {
 	if c.ListenPort <= 0 || c.ListenPort > 65535 {
 		return errors.New("listen_port must be between 1 and 65535")
-	}
-	if c.Token == "" {
-		return errors.New("token must be set")
 	}
 	return nil
 }

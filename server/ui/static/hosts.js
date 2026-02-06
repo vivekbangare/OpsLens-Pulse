@@ -7,7 +7,16 @@ const logoutBtn = document.getElementById("logoutBtn")
 if (!sessionStorage.getItem("loggedIn")) window.location.href = "/index.html"
 
 let hostsData = []
-const API_TOKEN = "mysecrettoken"; // use the token that works
+const API_TOKEN = sessionStorage.getItem("apiKey")
+
+if (!API_TOKEN) {
+  window.location.href = "/index.html"
+}
+
+const keyInfo = document.getElementById("apiKeyInfo")
+if (keyInfo) {
+  keyInfo.textContent = "API Key: ****" + API_TOKEN.slice(-4)
+}
 
 function timeAgo(date) {
   const seconds = Math.floor((Date.now() - new Date(date)) / 1000)
@@ -88,6 +97,7 @@ tagFilterInput.addEventListener("input", applyFilter)
 
 logoutBtn.addEventListener("click", () => {
   sessionStorage.removeItem("loggedIn")
+  sessionStorage.removeItem("apiKey")
   window.location.href = "/index.html"
 })
 

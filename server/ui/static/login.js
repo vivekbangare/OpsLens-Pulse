@@ -1,21 +1,23 @@
 const loginBtn = document.getElementById("loginBtn")
-const usernameInput = document.getElementById("username")
-const passwordInput = document.getElementById("password")
+const apiKeyInput = document.getElementById("apiKey")
 const errorBox = document.getElementById("error")
 
 loginBtn.addEventListener("click", () => {
-  const username = usernameInput.value.trim()
-  const password = passwordInput.value.trim()
+  const apiKey = apiKeyInput.value.trim()
 
-  if (username === "admin" && password === "admin@2026") {
-    sessionStorage.setItem("loggedIn", "true")
-    window.location.href = "/hosts.html"
-  } else {
-    errorBox.textContent = "Invalid username or password"
+  if (!apiKey) {
+    errorBox.textContent = "API key is required"
+    return
   }
+
+  //save API key in session storage and redirect to hosts page
+  sessionStorage.setItem("apiKey", apiKey)
+  sessionStorage.setItem("loggedIn", "true")
+  window.location.href = "/hosts.html"
+
 })
 
 // auto-redirect if already logged in
-if (sessionStorage.getItem("loggedIn")) {
+if (sessionStorage.getItem("apiKey") && sessionStorage.getItem("loggedIn") === "true") {
   window.location.href = "/hosts.html"
 }

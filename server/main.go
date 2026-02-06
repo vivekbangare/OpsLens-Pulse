@@ -2,18 +2,23 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"github.com/google/uuid"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
-	"strings"
 
 	"opslense-pulse/server/api"
 	"opslense-pulse/server/config"
+	"opslense-pulse/server/store"
 	"opslense-pulse/shared"
 )
 
@@ -40,18 +45,76 @@ Env:
 `)
 }
 
-// authMiddleware ensures requests have the correct token
-func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+// authMiddleware ensures requests have the correct API key
+func authMiddleware(s store.Store, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-		expected := "Bearer " + api.GetAuthToken()
-		if authHeader != expected {
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"unauthorized"}`))
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+
+		rawKey := strings.TrimPrefix(header, "Bearer ")
+
+		ok, err := s.ValidateAPIKey(rawKey)
+		if err != nil || !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		next(w, r)
 	}
+}
+
+func generateAPIKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return "opl_" + hex.EncodeToString(b)
+}
+
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+// Creates first API key if DB is empty
+func bootstrapAPIKeyIfNeeded(s store.Store) error {
+	count, err := s.CountAPIKeys()
+	if err != nil {
+		return err
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	rawKey := generateAPIKey()
+	hash := hashAPIKey(rawKey)
+
+	err = s.InsertAPIKey(store.APIKey{
+		AccountID:   "default",
+		KeyID:       uuid.NewString(),
+		KeyHash:     hash,
+		Name:        "bootstrap-admin",
+		IsActive:    true,
+		IsBootstrap: true,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("========================================")
+	fmt.Println(" OpsLens Pulse – Bootstrap API Key")
+	fmt.Println("========================================")
+	fmt.Println(" THIS KEY IS SHOWN ONLY ONCE")
+	fmt.Println()
+	fmt.Println(" API KEY:")
+	fmt.Println(" ", rawKey)
+	fmt.Println()
+	fmt.Println(" Store it securely. It cannot be recovered.")
+	fmt.Println("========================================")
+
+	return nil
 }
 
 func main() {
@@ -73,7 +136,7 @@ func main() {
 		return
 	}
 
-	// Load config first
+	// Load server config
 	cfg, path, created, err := config.LoadOrCreate(configPath)
 	if err != nil {
 		log.Fatal(err)
@@ -84,44 +147,48 @@ func main() {
 		log.Printf("📄 Server config loaded from: %s\n", path)
 	}
 
-	// Validate config
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("Invalid server config: %v", err)
 	}
 
-	token := cfg.Token
-	if token == "" {
-		log.Fatal("Server token must be set in config file")
+	// Connect to ClickHouse via store layer
+	chcfg := config.LoadClickHouse()
+	st, err := store.NewClickHouseStore(chcfg.DSN())
+	if err != nil {
+		log.Fatalf("Failed to connect to ClickHouse: %v", err)
 	}
-	api.SetAuthToken(token)
 
-	// 1. Serve static assets (CSS, JS)
+	// Bootstrap API key
+	if err := bootstrapAPIKeyIfNeeded(st); err != nil {
+		log.Fatalf("Failed to bootstrap API key: %v", err)
+	}
+
+	// Serve static assets
 	fs := http.FileServer(http.Dir("./server/ui/static"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	// 2. Serve HTML pages and hide .html in URLs
+	// Serve HTML
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if path == "/" {
 			path = "/index.html"
 		} else if !strings.HasSuffix(path, ".html") {
-			path = path + ".html"
+			path += ".html"
 		}
 		http.ServeFile(w, r, "./server/ui/static"+path)
 	})
 
-	// API endpoints with auth
-	http.HandleFunc("/api/heartbeat", authMiddleware(api.HeartbeatHandler))
-	http.HandleFunc("/api/logs", authMiddleware(api.LogsHandler))
-	http.HandleFunc("/api/metrics", authMiddleware(api.MetricsHandler))
-	http.HandleFunc("/api/hosts", authMiddleware(api.HostsHandler))
+	// API routes
+	http.HandleFunc("/api/heartbeat", authMiddleware(st, api.HeartbeatHandler))
+	http.HandleFunc("/api/logs", authMiddleware(st, api.LogsHandler))
+	http.HandleFunc("/api/metrics", authMiddleware(st, api.MetricsHandler))
+	http.HandleFunc("/api/hosts", authMiddleware(st, api.HostsHandler))
 
 	addr := fmt.Sprintf(":%d", cfg.ListenPort)
 	log.Println("Server listening on", addr)
 
 	srv := &http.Server{Addr: addr}
 
-	// Start server in a goroutine
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
@@ -136,8 +203,6 @@ func main() {
 	log.Println("Shutting down server...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server shutdown error: %v", err)
-	}
+	_ = srv.Shutdown(ctx)
 	log.Println("Server stopped")
 }

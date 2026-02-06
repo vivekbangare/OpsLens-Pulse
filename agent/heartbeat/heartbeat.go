@@ -8,8 +8,10 @@ import (
 )
 
 // Send sends a heartbeat to server
-func Send(serverURL, token, hostname string) error {
+func Send(serverURL, token, accountID, agentID, hostname string) error {
 	hb := shared.Heartbeat{
+		AccountID: accountID,
+		AgentID:   agentID,
 		Hostname:  hostname,
 		Timestamp: time.Now(),
 	}

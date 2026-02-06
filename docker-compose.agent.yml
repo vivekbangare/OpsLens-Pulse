@@ -1,0 +1,28 @@
+services:
+  agent1:
+    image: golang:1.24
+    container_name: opslens-agent1
+    hostname: opslens-agent1
+    working_dir: /app
+    networks:
+      - opslens-net
+    volumes:
+      - ./:/app
+      - ./agent-config1.yaml:/etc/opslens-pulse/agent-config.yaml
+    command: go run agent/main.go
+
+  agent2:
+    image: golang:1.24
+    container_name: opslens-agent2
+    hostname: opslens-agent2
+    working_dir: /app
+    networks:
+      - opslens-net
+    volumes:
+      - ./:/app
+      - ./agent-config2.yaml:/etc/opslens-pulse/agent-config.yaml
+    command: go run agent/main.go
+
+networks:
+  opslens-net:
+    external: true

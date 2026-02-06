@@ -11,6 +11,7 @@ import (
 
 	"opslense-pulse/agent/config"
 	"opslense-pulse/agent/heartbeat"
+	"opslense-pulse/agent/identity"
 	"opslense-pulse/agent/metrics"
 	"opslense-pulse/agent/sender"
 	"opslense-pulse/shared"
@@ -76,7 +77,6 @@ func getLocalIP() string {
 	return ""
 }
 
-
 func main() {
 	shared.InitLogger("agent")
 	log.Println("🚀 OpsLens-Pulse Agent starting...")
@@ -110,12 +110,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+	agentID, err := identity.LoadOrCreateAgentID()
+	if err != nil {
+		log.Fatal("Failed to load/create agent ID:", err)
+	}
+	log.Printf("🆔 Agent ID: %s\n", agentID)
+
 	hostname, _ := os.Hostname()
 	serverURL := cfg.Server.URL
-	token := cfg.Server.Token
+	apiKey := cfg.Server.APIKey
 
-	if serverURL == "" || token == "" {
-		log.Fatal("🌐 server.url and 🔐 server.token must be set in agent config")
+	if serverURL == "" || apiKey == "" {
+		log.Fatal("🌐 server.url and 🔐 server.api_key must be set in agent config")
 	}
 
 	for {
@@ -126,6 +132,8 @@ func main() {
 		osName, uptime := metrics.HostInfo()
 
 		m := shared.HostMetrics{
+			AccountID:  "default", // Placeholder, can be extended to support multiple accounts
+			AgentID:    agentID,
 			Hostname:   hostname,
 			OS:         osName,
 			Timestamp:  time.Now(),
@@ -139,12 +147,12 @@ func main() {
 		}
 
 		// Send metrics
-		if err := sender.Send(serverURL, token, m); err != nil {
+		if err := sender.Send(serverURL, apiKey, m); err != nil {
 			log.Println("Send failed:", err)
 		}
 
 		// Send heartbeat
-		if err := heartbeat.Send(serverURL, token, hostname); err != nil {
+		if err := heartbeat.Send(serverURL, apiKey, "default", agentID, hostname); err != nil {
 			log.Println("Heartbeat failed:", err)
 		}
 

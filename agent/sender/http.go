@@ -11,7 +11,7 @@ import (
 )
 
 // Send sends host metrics to server
-func Send(serverURL, token string, metrics shared.HostMetrics) error {
+func Send(serverURL, apiKey string, metrics shared.HostMetrics) error {
 	body, err := json.Marshal(metrics)
 	if err != nil {
 		return err
@@ -23,7 +23,7 @@ func Send(serverURL, token string, metrics shared.HostMetrics) error {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
@@ -39,11 +39,11 @@ func Send(serverURL, token string, metrics shared.HostMetrics) error {
 }
 
 // SendHeartbeat sends heartbeat info
-func SendHeartbeat(serverURL, token string, hb shared.Heartbeat) error {
+func SendHeartbeat(serverURL, apiKey string, hb shared.Heartbeat) error {
 	body, _ := json.Marshal(hb)
 
 	req, _ := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: 5 * time.Second}
