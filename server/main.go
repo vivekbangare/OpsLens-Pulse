@@ -24,6 +24,11 @@ import (
 
 const ServerVersion = "1.0.0"
 
+// -------------------------------------------
+// Helpers
+// -------------------------------------------
+
+// Print CLI help
 func printHelp() {
 	fmt.Print(`
 OpsLens-Pulse Server
@@ -45,39 +50,20 @@ Env:
 `)
 }
 
-// authMiddleware ensures requests have the correct API key
-func authMiddleware(s store.Store, next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		header := r.Header.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		rawKey := strings.TrimPrefix(header, "Bearer ")
-
-		ok, err := s.ValidateAPIKey(rawKey)
-		if err != nil || !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		next(w, r)
-	}
-}
-
+// Generate a random API key
 func generateAPIKey() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
 	return "opl_" + hex.EncodeToString(b)
 }
 
+// Hash API key (SHA256)
 func hashAPIKey(rawKey string) string {
 	sum := sha256.Sum256([]byte(rawKey))
 	return hex.EncodeToString(sum[:])
 }
 
-// Creates first API key if DB is empty
+// Bootstrap API key if DB is empty
 func bootstrapAPIKeyIfNeeded(s store.Store) error {
 	count, err := s.CountAPIKeys()
 	if err != nil {
@@ -91,13 +77,14 @@ func bootstrapAPIKeyIfNeeded(s store.Store) error {
 	rawKey := generateAPIKey()
 	hash := hashAPIKey(rawKey)
 
-	err = s.InsertAPIKey(store.APIKey{
+	err = s.InsertAPIKey(shared.APIKey{
 		AccountID:   "default",
 		KeyID:       uuid.NewString(),
 		KeyHash:     hash,
 		Name:        "bootstrap-admin",
-		IsActive:    true,
-		IsBootstrap: true,
+		IsActive:    1,
+		IsBootstrap: 1,
+		CreatedAt:   time.Now(),
 	})
 	if err != nil {
 		return err
@@ -117,10 +104,35 @@ func bootstrapAPIKeyIfNeeded(s store.Store) error {
 	return nil
 }
 
+// Auth wrapper for API handlers
+func makeAuthHandler(st store.Store, handler func(store.Store) http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		rawKey := strings.TrimPrefix(header, "Bearer ")
+		ok, err := st.ValidateAPIKey(rawKey)
+		if err != nil || !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		handler(st)(w, r)
+	}
+}
+
+// -------------------------------------------
+// Main
+// -------------------------------------------
+
 func main() {
 	shared.InitLogger("server")
 	log.Println("🚀 OpsLens-Pulse Server starting...")
 
+	// CLI flags
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Path to config file")
 	showHelp := flag.Bool("help", false, "Help")
@@ -146,16 +158,21 @@ func main() {
 	} else {
 		log.Printf("📄 Server config loaded from: %s\n", path)
 	}
-
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("Invalid server config: %v", err)
 	}
 
-	// Connect to ClickHouse via store layer
+	// -------------------------------
+	// Connect to ClickHouse or fallback to MemoryStore
+	// -------------------------------
+	var st store.Store
 	chcfg := config.LoadClickHouse()
-	st, err := store.NewClickHouseStore(chcfg.DSN())
+	chStore, err := store.NewClickHouseStore(chcfg.DSN())
 	if err != nil {
-		log.Fatalf("Failed to connect to ClickHouse: %v", err)
+		log.Println("ClickHouse unavailable, falling back to MemoryStore:", err)
+		st = store.NewMemoryStore()
+	} else {
+		st = chStore
 	}
 
 	// Bootstrap API key
@@ -163,7 +180,9 @@ func main() {
 		log.Fatalf("Failed to bootstrap API key: %v", err)
 	}
 
-	// Serve static assets
+	// -------------------------------
+	// Serve static files
+	// -------------------------------
 	fs := http.FileServer(http.Dir("./server/ui/static"))
 	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
@@ -178,12 +197,20 @@ func main() {
 		http.ServeFile(w, r, "./server/ui/static"+path)
 	})
 
-	// API routes
-	http.HandleFunc("/api/heartbeat", authMiddleware(st, api.HeartbeatHandler))
-	http.HandleFunc("/api/logs", authMiddleware(st, api.LogsHandler))
-	http.HandleFunc("/api/metrics", authMiddleware(st, api.MetricsHandler))
-	http.HandleFunc("/api/hosts", authMiddleware(st, api.HostsHandler))
+	// -------------------------------
+	// API routes - WITH AUTHENTICATION
+	// -------------------------------
+	http.HandleFunc("/api/heartbeat", makeAuthHandler(st, api.HeartbeatHandler))
+	http.HandleFunc("/api/metrics", makeAuthHandler(st, api.MetricsHandler))
+	http.HandleFunc("/api/hosts", makeAuthHandler(st, api.HostsHandler))
+	http.HandleFunc("/api/logs", makeAuthHandler(st, api.LogsHandler))
+	http.HandleFunc("/api/logs/fetch", makeAuthHandler(st, api.FetchLogsHandler))
+	http.HandleFunc("/api/container/metrics", makeAuthHandler(st, api.ContainerMetricsHandler))
+	http.HandleFunc("/api/container/logs", makeAuthHandler(st, api.ContainerLogsHandler))
 
+	// -------------------------------
+	// Start server
+	// -------------------------------
 	addr := fmt.Sprintf(":%d", cfg.ListenPort)
 	log.Println("Server listening on", addr)
 
@@ -195,7 +222,9 @@ func main() {
 		}
 	}()
 
+	// -------------------------------
 	// Graceful shutdown
+	// -------------------------------
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig

@@ -3,19 +3,37 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"time"
-
 	"opslense-pulse/server/store"
-	"opslense-pulse/shared"
+	"time"
 )
 
-func HeartbeatHandler(w http.ResponseWriter, r *http.Request) {
-	var hb shared.Heartbeat
-	if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
-		http.Error(w, "invalid heartbeat", 400)
-		return
-	}
+type HeartbeatPayload struct {
+	AccountID string `json:"account_id"`
+	AgentID   string `json:"agent_id"`
+	Hostname  string `json:"hostname"` // optional if needed
+}
 
-	store.UpdateHeartbeat(hb.Hostname, time.Now())
-	w.WriteHeader(http.StatusOK)
+func HeartbeatHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var hb HeartbeatPayload
+		if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if hb.AccountID == "" || hb.AgentID == "" {
+			http.Error(w, "missing account_id or agent_id", http.StatusBadRequest)
+			return
+		}
+
+		if err := store.UpdateHeartbeat(hb.AccountID, hb.AgentID, hb.Hostname); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"server_time": time.Now().Unix(),
+		})
+	}
 }

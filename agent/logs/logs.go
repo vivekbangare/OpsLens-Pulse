@@ -1,10 +1,27 @@
 package logs
 
 import (
+	"bufio"
 	"os"
+	"strings"
 )
 
-func Read(path string, lines int) string {
-	b, _ := os.ReadFile(path)
-	return string(b)
+func ReadLastLines(path string, n int) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var lines []string
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n"), scanner.Err()
 }

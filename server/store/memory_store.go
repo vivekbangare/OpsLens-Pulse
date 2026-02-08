@@ -1,151 +1,268 @@
 package store
 
 import (
-	"net"
 	"opslense-pulse/shared"
 	"sync"
 	"time"
 )
 
-type HostState struct {
-	Metrics  shared.HostMetrics
-	LastSeen time.Time
+// -------------------------------
+// MemoryStore struct
+// -------------------------------
+type MemoryStore struct {
+	mu         sync.RWMutex
+	hosts      map[string]*HostState
+	apiKeys    map[string]shared.APIKey
+	containers map[string]*ContainerState
+}
+
+type ContainerState struct {
+	Metrics  shared.ContainerMetrics
 	Logs     []string
-	IP       string // new field
+	LastSeen time.Time
 }
 
-var (
-	mu    sync.RWMutex // changed to RWMutex for better read performance
-	Hosts = make(map[string]*HostState)
-)
-
-func getHostIP(hostname string) string {
-	addrs, err := net.LookupIP(hostname)
-	if err != nil || len(addrs) == 0 {
-		return ""
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		hosts:      make(map[string]*HostState),
+		apiKeys:    make(map[string]shared.APIKey),
+		containers: make(map[string]*ContainerState),
 	}
-	for _, addr := range addrs {
-		if addr.To4() != nil {
-			return addr.String()
+}
+
+func (m *MemoryStore) SaveContainerMetrics(metrics shared.ContainerMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := metrics.Hostname + ":" + metrics.ContainerID
+	c, ok := m.containers[key]
+	if !ok {
+		c = &ContainerState{}
+		m.containers[key] = c
+	}
+	c.Metrics = metrics
+	c.LastSeen = time.Now()
+	return nil
+}
+
+func (m *MemoryStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, l := range batch.Logs {
+		key := batch.Hostname + ":" + l.ContainerID
+		c, ok := m.containers[key]
+		if !ok {
+			c = &ContainerState{}
+			m.containers[key] = c
 		}
+
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		c.Logs = append(c.Logs, l.Message+" ["+t.Format("2006-01-02 15:04:05")+"]")
+		c.LastSeen = t
 	}
-	return ""
+	return nil
 }
 
-func SaveMetrics(m shared.HostMetrics) {
-	mu.Lock()
-	defer mu.Unlock()
+// -------------------------------
+// SaveMetrics: store host metrics
+// -------------------------------
+func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	h, ok := Hosts[m.Hostname]
+	h, ok := m.hosts[metrics.Hostname]
 	if !ok {
 		h = &HostState{}
-		Hosts[m.Hostname] = h
+		m.hosts[metrics.Hostname] = h
 	}
-	h.Metrics = m
-	// Save IP from HostMetrics
-	if m.IP != "" {
-		h.IP = m.IP
-	} else if ip, ok := m.Tags["ip"]; ok {
+	h.Metrics = metrics
+
+	// Save IP if present
+	if ip, ok := metrics.Tags["ip"]; ok {
 		h.IP = ip
 	}
+
+	// Update heartbeat automatically
+	h.LastSeen = time.Now().Unix()
+	return nil
 }
 
-func UpdateHeartbeat(host string, t time.Time) {
-	mu.Lock()
-	defer mu.Unlock()
+// -------------------------------
+// UpdateHeartbeat
+// -------------------------------
+func (m *MemoryStore) UpdateHeartbeat(accountID, agentID, hostname string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	h, ok := Hosts[host]
+	h, ok := m.hosts[hostname]
 	if !ok {
 		h = &HostState{}
-		Hosts[host] = h
+		m.hosts[hostname] = h
+		m.hosts[hostname] = h
 	}
-	h.LastSeen = t
+	h.LastSeen = time.Now().Unix()
+	h.Metrics.AgentID = agentID
+	h.Metrics.Hostname = hostname
+	h.Metrics.AccountID = accountID
+
+	return nil
 }
 
-func GetAll() []map[string]interface{} {
-	mu.Lock()
-	defer mu.Unlock()
+// -------------------------------
+// Logs
+// -------------------------------
+func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	now := time.Now()
-	out := []map[string]interface{}{}
+	h, ok := m.hosts[batch.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[batch.Hostname] = h
+	}
 
-	for host, h := range Hosts {
-		alive := now.Sub(h.LastSeen) < 15*time.Second
-
-		out = append(out, map[string]interface{}{
-			"hostname":    host,
-			"os":          h.Metrics.OS,
-			"cpu_percent": h.Metrics.CPUPercent,
-			"mem_used_mb": h.Metrics.MemUsedMB,
-			"uptime_sec":  h.Metrics.UpTimeSec,
-			"last_seen":   h.LastSeen,
-			"alive":       alive,
+	for _, l := range batch.Logs {
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		h.Logs = append(h.Logs, shared.LogEntry{
+			AccountID: l.AccountID,
+			AgentID:   l.AgentID,
+			Hostname:  l.Hostname,
+			Level:     l.Level,
+			Message:   l.Message + " [" + t.Format("2006-01-02 15:04:05") + "]",
+			Timestamp: l.Timestamp,
+			Tags:      l.Tags,
 		})
 	}
-	return out
+	return nil
 }
 
-// SaveLog adds a log entry for a host
-func SaveLog(hostname string, log string) {
-	mu.Lock()
-	defer mu.Unlock()
-	h, ok := Hosts[hostname]
+// -------------------------------
+// Fetch logs
+// -------------------------------
+func (m *MemoryStore) GetLogs(hostname, agentID string, from, to time.Time, level string, limit int) ([]shared.LogEntry, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	h, ok := m.hosts[hostname]
 	if !ok {
-		h = &HostState{}
-		Hosts[hostname] = h
+		return nil, nil
 	}
-	h.Logs = append(h.Logs, log)
-}
 
-// GetLogs returns logs for a host
-func GetLogs(hostname string) []string {
-	mu.Lock()
-	defer mu.Unlock()
-	h, ok := Hosts[hostname]
-	if !ok {
-		return []string{}
-	}
-	return h.Logs
-}
-
-func GetFiltered(tags map[string]string) []map[string]interface{} {
-	mu.Lock()
-	defer mu.Unlock()
-
-	now := time.Now()
-	out := []map[string]interface{}{}
-
-	for host, h := range Hosts {
-		if !matchTags(h.Metrics.Tags, tags) {
+	var logs []shared.LogEntry
+	for _, l := range h.Logs {
+		// Filter by agentID if provided
+		if agentID != "" && l.AgentID != agentID {
+			continue
+		}
+		// Filter by level if provided
+		if level != "" && l.Level != level {
+			continue
+		}
+		// Filter by time range
+		t := time.Unix(l.Timestamp, 0)
+		if !from.IsZero() && t.Before(from) {
+			continue
+		}
+		if !to.IsZero() && t.After(to) {
 			continue
 		}
 
-		alive := now.Sub(h.LastSeen) < 15*time.Second
+		logs = append(logs, l)
+		// Respect limit
+		if limit > 0 && len(logs) >= limit {
+			break
+		}
+	}
+
+	return logs, nil
+}
+
+// -------------------------------
+// Get all hosts
+// -------------------------------
+func (m *MemoryStore) GetFiltered(accountID string, filters map[string]string) ([]map[string]interface{}, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	now := time.Now()
+	out := []map[string]interface{}{}
+
+	for _, h := range m.hosts {
+		if accountID != "" && h.Metrics.AccountID != accountID {
+			continue
+		}
+
+		// Match tags
+		match := true
+		for k, v := range filters {
+			if h.Metrics.Tags == nil || h.Metrics.Tags[k] != v {
+				match = false
+				break
+			}
+		}
+		if !match {
+			continue
+		}
 
 		out = append(out, map[string]interface{}{
-			"hostname":     host,
-			"ip":           h.IP,
-			"os":           h.Metrics.OS,
-			"cpu_percent":  h.Metrics.CPUPercent,
-			"mem_used_mb":  h.Metrics.MemUsedMB,
-			"mem_total_mb": h.Metrics.MemTotalMB,
-			"uptime_sec":   h.Metrics.UpTimeSec,
-			"last_seen":    h.LastSeen,
-			"alive":        alive,
-			"tags":         h.Metrics.Tags,
+			"agent_id":       h.Metrics.AgentID,
+			"hostname":       h.Metrics.Hostname,
+			"ip":             h.IP,
+			"os":             h.Metrics.OS,
+			"cpu_percent":    h.Metrics.CPUPercent,
+			"mem_used_mb":    h.Metrics.MemUsedMB,
+			"mem_total_mb":   h.Metrics.MemTotalMB,
+			"disk_used_mb":   h.Metrics.DiskUsedMB,
+			"disk_total_mb":  h.Metrics.DiskTotalMB,
+			"network_in_mb":  h.Metrics.NetworkInMB,
+			"network_out_mb": h.Metrics.NetworkOutMB,
+			"uptime_sec":     h.Metrics.UptimeSec,
+			"last_seen":      h.LastSeen,
+			"alive":          now.Sub(time.Unix(h.LastSeen, 0)) < 15*time.Second,
+			"tags":           h.Metrics.Tags,
 		})
 	}
-	return out
+	return out, nil
 }
 
-func matchTags(hostTags, filters map[string]string) bool {
-	for k, v := range filters {
-		if hostTags == nil {
-			return false
-		}
-		if hostTags[k] != v {
-			return false
-		}
-	}
-	return true
+// -------------------------------
+// API Keys
+// -------------------------------
+func (m *MemoryStore) CountAPIKeys() (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.apiKeys), nil
 }
+
+func (m *MemoryStore) InsertAPIKey(k shared.APIKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.apiKeys[k.KeyHash] = k
+	return nil
+}
+
+func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, error) {
+	hash := hashAPIKey(rawKey)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.apiKeys[hash]
+	return ok, nil
+}
+
+// -------------------------------
+// Helper: hash API key
+// -------------------------------
+// func hashAPIKey(rawKey string) string {
+// 	sum := sha256.Sum256([]byte(rawKey))
+// 	return hex.EncodeToString(sum[:])
+// }

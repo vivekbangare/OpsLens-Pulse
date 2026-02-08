@@ -1,27 +1,45 @@
 services:
-  agent1:
-    image: golang:1.24
-    container_name: opslens-agent1
-    hostname: opslens-agent1
+
+  loggen:
+    image: python:3.11-slim
+    container_name: loggen
+    hostname: loggen
+    working_dir: /logs
+    networks:
+      - opslens-net
+    volumes:
+      - ./logs:/logs  # host folder ./logs mounted to /logs in container
+    command: >
+      bash -c "while true; do
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random log message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random String message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random Number message\" >> /logs/random.log;
+        sleep 1;
+      done"
+  agent:
+    image: golang:1.25.6
+    container_name: opslens-agent
+    hostname: opslens-agent
     working_dir: /app
     networks:
       - opslens-net
     volumes:
       - ./:/app
       - ./agent-config1.yaml:/etc/opslens-pulse/agent-config.yaml
+      - ./logs:/logs
     command: go run agent/main.go
 
-  agent2:
-    image: golang:1.24
-    container_name: opslens-agent2
-    hostname: opslens-agent2
-    working_dir: /app
-    networks:
-      - opslens-net
-    volumes:
-      - ./:/app
-      - ./agent-config2.yaml:/etc/opslens-pulse/agent-config.yaml
-    command: go run agent/main.go
+  # agent2:
+  #   image: golang:1.24
+  #   container_name: opslens-agent2
+  #   hostname: opslens-agent2
+  #   working_dir: /app
+  #   networks:
+  #     - opslens-net
+  #   volumes:
+  #     - ./:/app
+  #     - ./agent-config2.yaml:/etc/opslens-pulse/agent-config.yaml
+  #   command: go run agent/main.go
 
 networks:
   opslens-net:

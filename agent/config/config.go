@@ -10,19 +10,22 @@ import (
 )
 
 type ServerConfig struct {
-	URL   string `yaml:"url"`
+	URL    string `yaml:"url"`
 	APIKey string `yaml:"api_key"`
 }
 
 type AgentConfig struct {
-	IntervalSeconds int  `yaml:"interval_seconds"`
-	SelfUpgrade     bool `yaml:"self_upgrade"`
+	IntervalSeconds              int    `yaml:"interval_seconds"`
+	SelfUpgrade                  bool   `yaml:"self_upgrade"`
+	LogFilePath                  string `yaml:"log_file_path"`
+	LogCollectionIntervalSeconds int    `yaml:"log_collection_interval_seconds"`
 }
 
 type Config struct {
-	Server ServerConfig      `yaml:"server"`
-	Agent  AgentConfig       `yaml:"agent"`
-	Tags   map[string]string `yaml:"tags"`
+	Server    ServerConfig      `yaml:"server"`
+	Agent     AgentConfig       `yaml:"agent"`
+	Tags      map[string]string `yaml:"tags"`
+	AccountID string            `yaml:"account_id"`
 }
 
 var DefaultPath string
@@ -77,16 +80,19 @@ func LoadOrCreateConfig(path string) (Config, string, bool, error) {
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
-			URL:   "http://localhost:9898",
+			URL:    "http://localhost:9898",
 			APIKey: "",
 		},
 		Agent: AgentConfig{
-			IntervalSeconds: 5,
-			SelfUpgrade:     false,
+			IntervalSeconds:              5,
+			SelfUpgrade:                  false,
+			LogFilePath:                  "",
+			LogCollectionIntervalSeconds: 10,
 		},
 		Tags: map[string]string{
 			"env": "dev",
 		},
+		AccountID: "default",
 	}
 }
 
@@ -96,7 +102,6 @@ func save(path string, cfg Config) error {
 	}
 
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-
 	if err != nil {
 		return err
 	}
@@ -117,5 +122,13 @@ func (c Config) Validate() error {
 	if c.Agent.IntervalSeconds <= 0 {
 		return errors.New("agent.interval_seconds must be > 0")
 	}
+
+	// Log collection validation (only if enabled by path)
+	if c.Agent.LogFilePath != "" {
+		if c.Agent.LogCollectionIntervalSeconds <= 0 {
+			return errors.New("agent.log_collection_interval_seconds must be > 0")
+		}
+	}
+
 	return nil
 }

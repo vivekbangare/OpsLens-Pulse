@@ -21,7 +21,7 @@ services:
         hard: 262144
 
   server:
-    image: golang:1.24
+    image: golang:1.25.6
     container_name: opslens-server
     working_dir: /app
     networks:
@@ -37,7 +37,7 @@ services:
       - CLICKHOUSE_PORT=9000
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=
-      - CLICKHOUSE_DATABASE=opslens
+      - CLICKHOUSE_DATABASE=default
     depends_on:
       - clickhouse
 

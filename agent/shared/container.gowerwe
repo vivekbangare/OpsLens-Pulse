@@ -1,0 +1,38 @@
+package shared
+
+import "time"
+
+// // ContainerMetrics represents metrics of a single container
+type ContainerMetrics struct {
+	AccountID   string            `json:"account_id"`
+	AgentID     string            `json:"agent_id"`
+	Hostname    string            `json:"hostname"`
+	ContainerID string            `json:"container_id"`
+	Name        string            `json:"name"`
+	Image       string            `json:"image"`
+	Status      string            `json:"status"`
+	CPUPercent  float64           `json:"cpu_percent"`
+	MemTotalMB  uint64            `json:"mem_total_mb"`
+	MemUsedMB   uint64            `json:"mem_used_mb"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Tags        map[string]string `json:"tags,omitempty"`
+	IP          string            `json:"ip,omitempty"`
+}
+
+// // ContainerLogEntry represents a single log line from a container
+type ContainerLogEntry struct {
+	AccountID   string `json:"account_id"`
+	AgentID     string `json:"agent_id"`
+	Hostname    string `json:"hostname"`
+	ContainerID string `json:"container_id"`
+	Timestamp   int64  `json:"timestamp"`
+	Message     string `json:"message"`
+}
+
+// // ContainerLogBatch represents multiple log entries
+type ContainerLogBatch struct {
+	AccountID string              `json:"account_id"`
+	AgentID   string              `json:"agent_id"`
+	Hostname  string              `json:"hostname"`
+	Logs      []ContainerLogEntry `json:"logs"`
+}

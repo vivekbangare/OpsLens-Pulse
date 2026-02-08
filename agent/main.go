@@ -1,15 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"runtime"
+	"syscall"
 	"time"
 
+	"opslense-pulse/agent/collector"
 	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/containers"
 	"opslense-pulse/agent/heartbeat"
 	"opslense-pulse/agent/identity"
 	"opslense-pulse/agent/metrics"
@@ -47,16 +52,13 @@ func getLocalIP() string {
 	}
 
 	for _, iface := range ifaces {
-		// ignore loopback & down interfaces
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
-
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
-
 		for _, addr := range addrs {
 			var ip net.IP
 			switch v := addr.(type) {
@@ -65,15 +67,12 @@ func getLocalIP() string {
 			case *net.IPAddr:
 				ip = v.IP
 			}
-
 			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
 				continue
 			}
-
-			return ip.String() // return first valid IPv4
+			return ip.String()
 		}
 	}
-
 	return ""
 }
 
@@ -81,6 +80,7 @@ func main() {
 	shared.InitLogger("agent")
 	log.Println("🚀 OpsLens-Pulse Agent starting...")
 
+	// Parse flags
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Config path")
 	showHelp := flag.Bool("help", false, "Help")
@@ -96,6 +96,7 @@ func main() {
 		return
 	}
 
+	// Load config
 	cfg, path, created, err := config.LoadOrCreateConfig(configPath)
 	if err != nil {
 		log.Fatal(err)
@@ -110,6 +111,7 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Agent ID
 	agentID, err := identity.LoadOrCreateAgentID()
 	if err != nil {
 		log.Fatal("Failed to load/create agent ID:", err)
@@ -119,48 +121,122 @@ func main() {
 	hostname, _ := os.Hostname()
 	serverURL := cfg.Server.URL
 	apiKey := cfg.Server.APIKey
+	accountID := cfg.AccountID // <--- configurable accountID
 
 	if serverURL == "" || apiKey == "" {
 		log.Fatal("🌐 server.url and 🔐 server.api_key must be set in agent config")
 	}
 
-	for {
-		start := time.Now()
-
-		// Collect metrics
-		memTotal, memUsed := metrics.Memory()
-		osName, uptime := metrics.HostInfo()
-
-		m := shared.HostMetrics{
-			AccountID:  "default", // Placeholder, can be extended to support multiple accounts
-			AgentID:    agentID,
-			Hostname:   hostname,
-			OS:         osName,
-			Timestamp:  time.Now(),
-			Cores:      runtime.NumCPU(),
-			MemTotalMB: memTotal,
-			MemUsedMB:  memUsed,
-			UpTimeSec:  uptime,
-			CPUPercent: metrics.CPUPercent(),
-			Tags:       cfg.Tags,
-			IP:         getLocalIP(),
-		}
-
-		// Send metrics
-		if err := sender.Send(serverURL, apiKey, m); err != nil {
-			log.Println("Send failed:", err)
-		}
-
-		// Send heartbeat
-		if err := heartbeat.Send(serverURL, apiKey, "default", agentID, hostname); err != nil {
-			log.Println("Heartbeat failed:", err)
-		}
-
-		// Correct sleep to avoid drift
-		elapsed := time.Since(start)
-		sleep := time.Duration(cfg.Agent.IntervalSeconds)*time.Second - elapsed
-		if sleep > 0 {
-			time.Sleep(sleep)
+	// Default log path
+	logPath := cfg.Agent.LogFilePath
+	if logPath == "" {
+		if runtime.GOOS == "windows" {
+			logPath = `C:\ProgramData\OpsLens-Pulse\agent.log`
+		} else {
+			logPath = "/var/log/opslens-pulse/agent.log"
 		}
 	}
+
+	logInterval := cfg.Agent.LogCollectionIntervalSeconds
+	if logInterval <= 0 {
+		logInterval = 10
+	}
+
+	// Context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Capture termination signals
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start host log collector
+	go collector.StartLogCollector(ctx, agentID, logPath, serverURL, apiKey, logInterval, accountID)
+
+	// Docker detection
+	dockerAvailable := false
+	if _, err := containers.ListRunning(); err == nil {
+		dockerAvailable = true
+	}
+
+	if dockerAvailable {
+		log.Println("🐳 Docker detected: starting container collectors...")
+
+		go collector.StartContainerMetricsCollector(ctx, agentID, accountID, hostname, serverURL, apiKey, 10)
+		go collector.StartContainerLogsCollector(ctx, agentID, accountID, hostname, serverURL, apiKey, 10)
+	}
+
+	// Main metrics + heartbeat loop
+	ticker := time.NewTicker(time.Duration(cfg.Agent.IntervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Agent shutting down gracefully...")
+			return
+		case <-sig:
+			cancel()
+		case <-ticker.C:
+			start := time.Now()
+
+			// Collect host metrics
+			memTotal, memUsed := metrics.Memory()
+			osName, uptime := metrics.HostInfo()
+
+			m := shared.HostMetrics{
+				AccountID:  cfg.AccountID,
+				AgentID:    agentID,
+				Hostname:   hostname,
+				OS:         osName,
+				Timestamp:  time.Now().Unix(),
+				Cores:      runtime.NumCPU(),
+				MemTotalMB: float32(memTotal),
+				MemUsedMB:  float32(memUsed),
+				UptimeSec:  uptime,
+				CPUPercent: float32(metrics.CPUPercent()),
+				Tags:       cfg.Tags,
+				IP:         getLocalIP(),
+			}
+
+			// Send host metrics with retry
+			go func() {
+				if err := retrySend(3, 2*time.Second, func() error {
+					return sender.Send(serverURL, apiKey, m)
+				}); err != nil {
+					log.Println("Metrics send failed:", err)
+				}
+			}()
+
+			// Send heartbeat with retry
+			go func() {
+				if err := retrySend(3, 2*time.Second, func() error {
+					return heartbeat.Send(serverURL, apiKey, accountID, agentID, hostname)
+				}); err != nil {
+					log.Println("Heartbeat send failed:", err)
+				}
+			}()
+
+			// Correct sleep to avoid drift
+			elapsed := time.Since(start)
+			sleep := time.Duration(cfg.Agent.IntervalSeconds)*time.Second - elapsed
+			if sleep > 0 {
+				time.Sleep(sleep)
+			}
+		}
+	}
+}
+
+// retrySend retries the provided function with exponential backoff
+func retrySend(attempts int, baseDelay time.Duration, fn func() error) error {
+	delay := baseDelay
+	for i := 0; i < attempts; i++ {
+		if err := fn(); err != nil {
+			time.Sleep(delay)
+			delay *= 2
+		} else {
+			return nil
+		}
+	}
+	return fmt.Errorf("all retries failed")
 }

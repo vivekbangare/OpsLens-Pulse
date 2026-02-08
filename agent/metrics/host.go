@@ -7,6 +7,9 @@ import (
 )
 
 func HostInfo() (string, uint64) {
-	h, _ := host.Info()
+	h, err := host.Info()
+	if err != nil {
+		return runtime.GOOS, 0
+	}
 	return runtime.GOOS, h.Uptime
 }

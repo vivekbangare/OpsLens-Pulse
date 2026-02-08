@@ -1,9 +1,11 @@
 server:
   url: http://server:9898
-  api_key: opl_445230515cedb751d410dce137df59865bf567309fcc4c028381c0f1cd719af8
+  api_key: opl_c0a10bc7604c8ec89c671dad3db081e67b17a16f6e5b4bc2e8ced81f12d31a11
 agent:
   interval_seconds: 5
   self_upgrade: false
+  log_file_path: /var/log/opslens-pulse/agent.log
+  log_collection_interval_seconds: 10
   
 tags:
   env: prod
