@@ -19,6 +19,11 @@ services:
       nofile:
         soft: 262144
         hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   server:
     image: golang:1.25.6
@@ -37,9 +42,11 @@ services:
       - CLICKHOUSE_PORT=9000
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=
-      - CLICKHOUSE_DATABASE=default
+      - CLICKHOUSE_DATABASE=opslens
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_healthy
+
 
 networks:
   opslens-net:

@@ -147,3 +147,27 @@ th, td {
 #hostDetails button#backBtn::before {
   content: "⬅ "; /* Unicode left arrow */
 }
+.panel {
+  margin-top: 16px;
+  padding: 12px;
+  background: #1e293b;
+  border-radius: 6px;
+}
+
+.log-box {
+  background: #020617;
+  padding: 8px;
+  height: 200px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 13px;
+  border-radius: 4px;
+}
+
+.link {
+  cursor: pointer;
+  color: #93c5fd;
+}
+.link:hover {
+  text-decoration: underline;
+}

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
@@ -38,74 +37,6 @@ func NewClickHouseStore(dsn string) (*ClickHouseStore, error) {
 	}
 
 	return &ClickHouseStore{db: db}, nil
-}
-
-// -------------------------------
-// Metrics
-// -------------------------------
-func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
-	tagsJSON, _ := json.Marshal(m.Tags)
-	ttl := m.TTLDays
-	if ttl == 0 {
-		ttl = 90
-	}
-
-	ts := time.Now()
-	if m.Timestamp > 0 {
-		if m.Timestamp > 1e12 {
-			ts = time.UnixMilli(m.Timestamp)
-		} else {
-			ts = time.Unix(m.Timestamp, 0)
-		}
-	}
-
-	_, err := c.db.Exec(`
-		INSERT INTO metrics
-		(account_id, agent_id, hostname, cpu_percent, mem_used_mb, mem_total_mb,
-		 disk_used_mb, disk_total_mb, network_in_mb, network_out_mb, uptime_sec, tags, ts, ttl_days)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		m.AccountID,
-		m.AgentID,
-		m.Hostname,
-		m.CPUPercent,
-		m.MemUsedMB,
-		m.MemTotalMB,
-		m.DiskUsedMB,
-		m.DiskTotalMB,
-		m.NetworkInMB,
-		m.NetworkOutMB,
-		m.UptimeSec,
-		string(tagsJSON),
-		ts,
-		ttl,
-	)
-
-	if err != nil {
-		return fmt.Errorf("SaveMetrics failed: %w", err)
-	}
-
-	// Update heartbeat at the same time
-	return c.UpdateHeartbeat(m.AccountID, m.AgentID, m.Hostname)
-}
-
-// -------------------------------
-// Heartbeat / Agents
-// -------------------------------
-func (c *ClickHouseStore) UpdateHeartbeat(accountID, agentID, hostname string) error {
-	now := time.Now()
-	_, err := c.db.Exec(`
-		INSERT INTO agents (account_id, agent_id, hostname, last_seen)
-		VALUES (?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE last_seen = ?
-	`,
-		accountID,
-		agentID,
-		hostname,
-		now,
-		now,
-	)
-	return err
 }
 
 // -------------------------------
@@ -162,6 +93,48 @@ func (c *ClickHouseStore) ValidateAPIKey(rawKey string) (bool, error) {
 	}
 	return true, nil
 }
+
+// -------------------------------
+// Metrics
+// -------------------------------
+func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
+	// Marshal tags once
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	// Resolve timestamp
+	ts := time.Now()
+	if m.Timestamp > 0 {
+		if m.Timestamp > 1e12 {
+			ts = time.UnixMilli(m.Timestamp)
+		} else {
+			ts = time.Unix(m.Timestamp, 0)
+		}
+	}
+
+	// Resolve TTL
+	ttl := m.TTLDays
+	if ttl == 0 {
+		ttl = 90
+	}
+
+	_, err := c.db.Exec(`
+		INSERT INTO agents
+		(account_id, agent_id, hostname, ip, os, environment, tags, last_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.Hostname,
+		m.IP,
+		m.OS,
+		m.Tags["env"], // environment
+		string(tagsJSON),
+		ts,
+	)
+
+	return err
+}
+
 
 // -------------------------------
 // Logs
@@ -222,14 +195,34 @@ func (c *ClickHouseStore) InsertLogs(batch shared.LogBatch) error {
 	return tx.Commit()
 }
 
-func (c *ClickHouseStore) GetLogs(accountID, agentID string, from, to time.Time, level string, limit int) ([]shared.LogEntry, error) {
-	query := `
-		SELECT agent_id, timestamp, level, message, tags
-		FROM logs
-		WHERE account_id = ? AND agent_id = ? AND timestamp BETWEEN ? AND ?
-	`
-	args := []interface{}{accountID, agentID, from, to}
+func (c *ClickHouseStore) GetLogs(
+	accountID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	limit int,
+) ([]shared.LogEntry, error) {
 
+	query := `
+		SELECT agent_id, hostname, timestamp, level, message, tags
+		FROM logs
+		WHERE account_id = ?
+	`
+	args := []interface{}{accountID}
+
+	if hostname != "" {
+		query += " AND hostname = ?"
+		args = append(args, hostname)
+	}
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	if !from.IsZero() && !to.IsZero() {
+		query += " AND timestamp BETWEEN ? AND ?"
+		args = append(args, from, to)
+	}
 	if level != "" {
 		query += " AND level = ?"
 		args = append(args, level)
@@ -250,103 +243,31 @@ func (c *ClickHouseStore) GetLogs(accountID, agentID string, from, to time.Time,
 		var ts time.Time
 		var tagsJSON string
 
-		if err := rows.Scan(&le.AgentID, &ts, &le.Level, &le.Message, &tagsJSON); err != nil {
+		if err := rows.Scan(
+			&le.AgentID,
+			&le.Hostname,
+			&ts,
+			&le.Level,
+			&le.Message,
+			&tagsJSON,
+		); err != nil {
 			return nil, err
 		}
 
-		le.Tags = map[string]string{}
-		json.Unmarshal([]byte(tagsJSON), &le.Tags)
 		le.Timestamp = ts.Unix()
 		le.HumanTime = ts.Format("2006-01-02 15:04:05")
+		_ = json.Unmarshal([]byte(tagsJSON), &le.Tags)
+
 		logs = append(logs, le)
 	}
 
 	return logs, nil
 }
 
-// -------------------------------
-// Hosts / Metrics with Filters
-// -------------------------------
-func (c *ClickHouseStore) GetFiltered(accountID string, filters map[string]string) ([]map[string]interface{}, error) {
-	query := `
-	SELECT agent_id, hostname,
-	       any(cpu_percent) AS cpu_percent,
-	       any(mem_used_mb) AS mem_used_mb,
-	       any(mem_total_mb) AS mem_total_mb,
-	       any(disk_used_mb) AS disk_used_mb,
-	       any(disk_total_mb) AS disk_total_mb,
-	       any(network_in_mb) AS network_in_mb,
-	       any(network_out_mb) AS network_out_mb,
-	       any(uptime_sec) AS uptime_sec,
-	       max(ts) AS last_seen,
-	       tags
-	FROM metrics
-	WHERE account_id = ?
-	`
-	args := []interface{}{accountID}
-
-	for k, v := range filters {
-		query += fmt.Sprintf(" AND JSONExtractString(tags, '%s') = ?", k)
-		args = append(args, v)
-	}
-
-	query += " GROUP BY agent_id, hostname, tags ORDER BY last_seen DESC"
-
-	rows, err := c.db.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	now := time.Now()
-	out := []map[string]interface{}{}
-
-	for rows.Next() {
-		var agentID, hostname, tagsJSON string
-		var cpu, memUsed, memTotal, diskUsed, diskTotal, netIn, netOut float32
-		var uptime uint64
-		var lastSeen time.Time
-
-		if err := rows.Scan(
-			&agentID, &hostname,
-			&cpu, &memUsed, &memTotal,
-			&diskUsed, &diskTotal, &netIn, &netOut,
-			&uptime, &lastSeen, &tagsJSON,
-		); err != nil {
-			return nil, err
-		}
-
-		tags := map[string]string{}
-		json.Unmarshal([]byte(tagsJSON), &tags)
-
-		out = append(out, map[string]interface{}{
-			"agent_id":       agentID,
-			"hostname":       hostname,
-			"cpu_percent":    cpu,
-			"mem_used_mb":    memUsed,
-			"mem_total_mb":   memTotal,
-			"disk_used_mb":   diskUsed,
-			"disk_total_mb":  diskTotal,
-			"network_in_mb":  netIn,
-			"network_out_mb": netOut,
-			"uptime_sec":     uptime,
-			"last_seen":      lastSeen,
-			"alive":          now.Sub(lastSeen) < 15*time.Second,
-			"tags":           tags,
-		})
-	}
-
-	return out, nil
-}
-
 func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error {
 	ts := time.Now()
 	if m.Timestamp > 0 {
-		if m.Timestamp > 1e12 {
-			ts = time.UnixMilli(m.Timestamp)
-		} else {
-			ts = time.Unix(m.Timestamp, 0)
-		}
+		ts = time.Unix(m.Timestamp, 0)
 	}
 
 	ttl := m.TTLDays
@@ -356,17 +277,32 @@ func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error 
 
 	_, err := c.db.Exec(`
 		INSERT INTO container_metrics
-		(account_id, agent_id, hostname, container_id, container_name,
-		 cpu_percent, mem_used_mb, mem_total_mb, disk_used_mb, disk_total_mb,
-		 network_in_mb, network_out_mb, ts, ttl_days)
+		(account_id, agent_id, hostname, container_id, name,
+		 cpu_percent, mem_used_mb, mem_total_mb,
+		 disk_used_mb, disk_total_mb,
+		 network_in_mb, network_out_mb,
+		 ts, ttl_days)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		m.AccountID, m.AgentID, m.Hostname, m.ContainerID, m.ContainerName,
-		m.CPUPercent, m.MemUsedMB, m.MemTotalMB, m.DiskUsedMB, m.DiskTotalMB,
-		m.NetworkInMB, m.NetworkOutMB, ts, ttl,
+		m.AccountID,
+		m.AgentID,
+		m.Hostname,
+		m.ContainerID,
+		m.ContainerName, // ✅ FIXED
+		m.CPUPercent,
+		m.MemUsedMB,
+		m.MemTotalMB,
+		m.DiskUsedMB,
+		m.DiskTotalMB,
+		m.NetworkInMB,
+		m.NetworkOutMB,
+		ts,
+		ttl,
 	)
+
 	return err
 }
+
 
 func (c *ClickHouseStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
 	tx, err := c.db.Begin()
@@ -415,6 +351,138 @@ func (c *ClickHouseStore) InsertContainerLogs(batch shared.ContainerLogBatch) er
 
 	return tx.Commit()
 }
+
+func (c *ClickHouseStore) GetFiltered(
+    accountID string,
+    resourceType string,
+    filters map[string]string,
+    start, end time.Time,
+    limit int,
+) ([]shared.LogEntry, error) {
+
+    if limit <= 0 {
+        limit = 100
+    }
+
+    query := `
+    SELECT
+        timestamp,
+        level,
+        message,
+        hostname,
+        agent_id
+    FROM logs
+    WHERE account_id = ?
+    `
+
+    args := []any{accountID}
+
+    if !start.IsZero() {
+        query += " AND timestamp >= ?"
+        args = append(args, start)
+    }
+
+    if !end.IsZero() {
+        query += " AND timestamp <= ?"
+        args = append(args, end)
+    }
+
+    for k, v := range filters {
+        query += " AND " + k + " = ?"
+        args = append(args, v)
+    }
+
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    args = append(args, limit)
+
+    rows, err := c.db.Query(query, args...)
+    if err != nil {
+        return nil, err
+    }
+    defer rows.Close()
+
+    logs := []shared.LogEntry{}
+    for rows.Next() {
+        var l shared.LogEntry
+        if err := rows.Scan(
+            &l.Timestamp,
+            &l.Level,
+            &l.Message,
+            &l.Hostname,
+            &l.AgentID,
+        ); err != nil {
+            return nil, err
+        }
+        logs = append(logs, l)
+    }
+
+    return logs, nil
+}
+func (c *ClickHouseStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+	_, err := c.db.Exec(`
+		INSERT INTO agents
+		(account_id, agent_id, hostname, last_seen)
+		VALUES (?, ?, ?, ?)
+	`,
+		hb.AccountID,
+		hb.AgentID,
+		hb.Hostname,
+		hb.Timestamp,
+	)
+	return err
+}
+
+func (c *ClickHouseStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+	rows, err := c.db.Query(`
+		SELECT
+			account_id,
+			agent_id,
+			hostname,
+			ip,
+			os,
+			environment,
+			tags,
+			first_seen,
+			last_seen
+		FROM agents
+		WHERE account_id = ?
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	aliveWindow := 30 * time.Second
+
+	var out []shared.AgentInfo
+	for rows.Next() {
+		var a shared.AgentInfo
+		var tagsJSON string
+
+		if err := rows.Scan(
+			&a.AccountID,
+			&a.AgentID,
+			&a.Hostname,
+			&a.IP,
+			&a.OS,
+			&a.Environment,
+			&tagsJSON,
+			&a.FirstSeen,
+			&a.LastSeen,
+		); err != nil {
+			return nil, err
+		}
+
+		_ = json.Unmarshal([]byte(tagsJSON), &a.Tags)
+		a.Alive = now.Sub(a.LastSeen) <= aliveWindow
+
+		out = append(out, a)
+	}
+
+	return out, nil
+}
+
 
 // -------------------------------
 // Ensure it implements Store interface

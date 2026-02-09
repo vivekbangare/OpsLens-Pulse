@@ -14,7 +14,7 @@ func ToSharedMetrics(
 		AgentID:     agentID,
 		Hostname:    hostname,
 		ContainerID: raw.ID,
-		Name:        raw.Name,
+		ContainerName: raw.Name,
 		Image:       raw.Image,
 		Status:      raw.Status,
 		CPUPercent:  float32(raw.CPU),

@@ -7,19 +7,15 @@
 </head>
 <body>
   <h1>🖥️ OpsLens Pulse</h1>
-  <!-- API key hint (masked) -->
   <small id="apiKeyInfo" style="float:right; color:#94a3b8;"></small>
 
   <div class="controls">
-    <!-- Input for filtering by hostname -->
     <input type="text" id="searchInput" placeholder="Search hosts..." />
-    
-    <!-- Input for filtering by tag (key=value) -->
     <input type="text" id="tagFilterInput" placeholder="Filter by tag (env=prod)" />
-    
     <button id="logoutBtn">Logout</button>
   </div>
 
+  <!-- HOST LIST -->
   <table id="hosts">
     <thead>
       <tr>
@@ -31,17 +27,24 @@
     <tbody></tbody>
   </table>
 
+  <!-- HOST DETAILS -->
   <div id="hostDetails" style="display:none">
+    <button id="backBtn">Back</button>
     <h2 id="detailsHostname"></h2>
-    <p><strong>IP:</strong> <span id="detailsIP"></span></p>
-    <p><strong>OS:</strong> <span id="detailsOS"></span></p>
-    <p><strong>CPU:</strong> <span id="detailsCPU"></span>%</p>
-    <p><strong>Memory:</strong> <span id="detailsMem"></span> MB</p>
-    <p><strong>Uptime:</strong> <span id="detailsUptime"></span> sec</p>
-    <p><strong>Tags:</strong> <span id="detailsTags"></span></p>
-    <!-- NEW: logs container -->
-    <div>
-      <h3>Logs</h3>
+
+    <div class="panel">
+      <p><strong>IP:</strong> <span id="detailsIP"></span></p>
+      <p><strong>OS:</strong> <span id="detailsOS"></span></p>
+      <p><strong>CPU:</strong> <span id="detailsCPU"></span>%</p>
+      <p><strong>Memory:</strong> <span id="detailsMem"></span> MB</p>
+      <p><strong>Uptime:</strong> <span id="detailsUptime"></span></p>
+      <p><strong>Tags:</strong> <span id="detailsTags"></span></p>
+    </div>
+
+    <!-- HOST LOGS -->
+    <div class="panel">
+      <h3>📜 Host Logs</h3>
+
       <div class="log-controls">
         <select id="logTimeRange">
           <option value="5m">Last 5 min</option>
@@ -52,19 +55,38 @@
 
         <select id="logLevel">
           <option value="">ALL</option>
-          <option value="INFO">INFO</option>
-          <option value="WARN">WARN</option>
-          <option value="ERROR">ERROR</option>
+          <option value="info">INFO</option>
+          <option value="warn">WARN</option>
+          <option value="error">ERROR</option>
         </select>
       </div>
 
-      <div id="hostLogs"
-          style="background:#0f172a; color:#e5e7eb; padding:8px;
-                  height:200px; overflow:auto; border-radius:4px;
-                  font-family:monospace;">
-      </div>
+      <div id="hostLogs" class="log-box"></div>
     </div>
-    <button id="backBtn">Back</button>
+
+    <!-- CONTAINERS -->
+    <div class="panel">
+      <h3>🐳 Containers</h3>
+
+      <table id="containers">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Image</th>
+            <th>Status</th>
+            <th>CPU</th>
+            <th>Memory</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- CONTAINER LOGS -->
+    <div class="panel" id="containerLogsPanel" style="display:none">
+      <h3>📦 Container Logs: <span id="containerTitle"></span></h3>
+      <div id="containerLogs" class="log-box"></div>
+    </div>
   </div>
 
   <script src="/static/hosts.js"></script>

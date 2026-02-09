@@ -7,22 +7,19 @@ import (
 	"opslense-pulse/server/store"
 )
 
-func HostsHandler(s store.Store) http.HandlerFunc {
+func HostsHandler(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Optionally parse query params
 		accountID := r.URL.Query().Get("account_id")
+		if accountID == "" {
+			accountID = "default"
+		}
 
-		filters := make(map[string]string)
-		// parse filters from query if needed
-
-		hosts, err := s.GetFiltered(accountID, filters)
+		agents, err := st.ListAgents(accountID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(hosts)
+		json.NewEncoder(w).Encode(agents)
 	}
 }

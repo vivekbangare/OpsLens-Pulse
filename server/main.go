@@ -200,8 +200,8 @@ func main() {
 	// -------------------------------
 	// API routes - WITH AUTHENTICATION
 	// -------------------------------
-	http.HandleFunc("/api/heartbeat", makeAuthHandler(st, api.HeartbeatHandler))
 	http.HandleFunc("/api/metrics", makeAuthHandler(st, api.MetricsHandler))
+	http.HandleFunc("/api/heartbeat", makeAuthHandler(st, api.HeartbeatHandler))
 	http.HandleFunc("/api/hosts", makeAuthHandler(st, api.HostsHandler))
 	http.HandleFunc("/api/logs", makeAuthHandler(st, api.LogsHandler))
 	http.HandleFunc("/api/logs/fetch", makeAuthHandler(st, api.FetchLogsHandler))
@@ -214,7 +214,13 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.ListenPort)
 	log.Println("Server listening on", addr)
 
-	srv := &http.Server{Addr: addr}
+	srv := &http.Server{
+		Addr: addr,
+		ReadTimeout: 10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

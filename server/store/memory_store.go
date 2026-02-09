@@ -82,35 +82,13 @@ func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
 		h = &HostState{}
 		m.hosts[metrics.Hostname] = h
 	}
-	h.Metrics = metrics
 
-	// Save IP if present
+	h.Metrics = metrics
+	h.LastSeen = time.Now().Unix()
+
 	if ip, ok := metrics.Tags["ip"]; ok {
 		h.IP = ip
 	}
-
-	// Update heartbeat automatically
-	h.LastSeen = time.Now().Unix()
-	return nil
-}
-
-// -------------------------------
-// UpdateHeartbeat
-// -------------------------------
-func (m *MemoryStore) UpdateHeartbeat(accountID, agentID, hostname string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	h, ok := m.hosts[hostname]
-	if !ok {
-		h = &HostState{}
-		m.hosts[hostname] = h
-		m.hosts[hostname] = h
-	}
-	h.LastSeen = time.Now().Unix()
-	h.Metrics.AgentID = agentID
-	h.Metrics.Hostname = hostname
-	h.Metrics.AccountID = accountID
 
 	return nil
 }
@@ -149,7 +127,15 @@ func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
 // -------------------------------
 // Fetch logs
 // -------------------------------
-func (m *MemoryStore) GetLogs(hostname, agentID string, from, to time.Time, level string, limit int) ([]shared.LogEntry, error) {
+func (m *MemoryStore) GetLogs(
+	accountID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -160,15 +146,17 @@ func (m *MemoryStore) GetLogs(hostname, agentID string, from, to time.Time, leve
 
 	var logs []shared.LogEntry
 	for _, l := range h.Logs {
-		// Filter by agentID if provided
+
+		if accountID != "" && l.AccountID != accountID {
+			continue
+		}
 		if agentID != "" && l.AgentID != agentID {
 			continue
 		}
-		// Filter by level if provided
 		if level != "" && l.Level != level {
 			continue
 		}
-		// Filter by time range
+
 		t := time.Unix(l.Timestamp, 0)
 		if !from.IsZero() && t.Before(from) {
 			continue
@@ -178,61 +166,11 @@ func (m *MemoryStore) GetLogs(hostname, agentID string, from, to time.Time, leve
 		}
 
 		logs = append(logs, l)
-		// Respect limit
 		if limit > 0 && len(logs) >= limit {
 			break
 		}
 	}
-
 	return logs, nil
-}
-
-// -------------------------------
-// Get all hosts
-// -------------------------------
-func (m *MemoryStore) GetFiltered(accountID string, filters map[string]string) ([]map[string]interface{}, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	now := time.Now()
-	out := []map[string]interface{}{}
-
-	for _, h := range m.hosts {
-		if accountID != "" && h.Metrics.AccountID != accountID {
-			continue
-		}
-
-		// Match tags
-		match := true
-		for k, v := range filters {
-			if h.Metrics.Tags == nil || h.Metrics.Tags[k] != v {
-				match = false
-				break
-			}
-		}
-		if !match {
-			continue
-		}
-
-		out = append(out, map[string]interface{}{
-			"agent_id":       h.Metrics.AgentID,
-			"hostname":       h.Metrics.Hostname,
-			"ip":             h.IP,
-			"os":             h.Metrics.OS,
-			"cpu_percent":    h.Metrics.CPUPercent,
-			"mem_used_mb":    h.Metrics.MemUsedMB,
-			"mem_total_mb":   h.Metrics.MemTotalMB,
-			"disk_used_mb":   h.Metrics.DiskUsedMB,
-			"disk_total_mb":  h.Metrics.DiskTotalMB,
-			"network_in_mb":  h.Metrics.NetworkInMB,
-			"network_out_mb": h.Metrics.NetworkOutMB,
-			"uptime_sec":     h.Metrics.UptimeSec,
-			"last_seen":      h.LastSeen,
-			"alive":          now.Sub(time.Unix(h.LastSeen, 0)) < 15*time.Second,
-			"tags":           h.Metrics.Tags,
-		})
-	}
-	return out, nil
 }
 
 // -------------------------------
@@ -259,10 +197,32 @@ func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, error) {
 	return ok, nil
 }
 
-// -------------------------------
-// Helper: hash API key
-// -------------------------------
-// func hashAPIKey(rawKey string) string {
-// 	sum := sha256.Sum256([]byte(rawKey))
-// 	return hex.EncodeToString(sum[:])
-// }
+func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[hb.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[hb.Hostname] = h
+	}
+	h.LastSeen = hb.Timestamp.Unix()
+	return nil
+}
+
+func (m *MemoryStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var agents []shared.AgentInfo
+
+	for hostname, h := range m.hosts {
+		agents = append(agents, shared.AgentInfo{
+			AccountID: accountID,
+			Hostname:  hostname,
+			LastSeen:  time.Unix(h.LastSeen, 0),
+		})
+	}
+
+	return agents, nil
+}

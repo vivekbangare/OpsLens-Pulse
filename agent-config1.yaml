@@ -1,6 +1,9 @@
 server:
   url: http://server:9898
-  api_key: opl_a4e85dd5b6d16a283881e8f78c14bda4f21d7734d48311fcb8697b7e1139ef8f
+  api_key: opl_e6efd924c142995d1fd57ca9ffce064a47bde3ef2e00b95bd0600d4015b86ce1
+
+account_id: default
+
 agent:
   interval_seconds: 5
   self_upgrade: false

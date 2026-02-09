@@ -77,6 +77,7 @@ type AgentInfo struct {
 	Tags        map[string]string `json:"tags"`
 	FirstSeen   time.Time         `json:"first_seen"`
 	LastSeen    time.Time         `json:"last_seen"`
+	Alive       bool              `json:"alive"`
 }
 
 // -------------------------------
@@ -92,7 +93,6 @@ type Heartbeat struct {
 type ContainerMetrics struct {
 	AccountID     string            `json:"account_id"`
 	AgentID       string            `json:"agent_id"`
-	Name          string            `json:"name"`
 	Hostname      string            `json:"hostname"`
 	Image         string            `json:"image"`
 	Status        string            `json:"status"`

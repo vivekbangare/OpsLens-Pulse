@@ -68,7 +68,15 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 			limit = 100
 		}
 
-		logs, err := s.GetLogs(hostname, accountID, start, end, level, limit)
+		logs, err := s.GetLogs(
+			accountID,
+			hostname,
+			"",
+			start,
+			end,
+			level,
+			limit,
+		)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
