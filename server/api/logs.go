@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"opslense-pulse/server/store"
 	"opslense-pulse/shared"
@@ -9,6 +10,10 @@ import (
 	"time"
 )
 
+/*
+POST /api/logs
+Agent → Server (INSERT)
+*/
 func LogsHandler(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var batch shared.LogBatch
@@ -16,9 +21,24 @@ func LogsHandler(store store.Store) http.HandlerFunc {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
+		log.Printf(
+			"📥 Inserting logs: account=%s agent=%s host=%s count=%d",
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			len(batch.Logs),
+		)
 
 		if batch.AccountID == "" {
 			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+		if batch.AgentID == "" {
+			http.Error(w, "missing agent_id", http.StatusBadRequest)
+			return
+		}
+		if batch.Hostname == "" {
+			http.Error(w, "missing hostname", http.StatusBadRequest)
 			return
 		}
 
@@ -31,47 +51,50 @@ func LogsHandler(store store.Store) http.HandlerFunc {
 	}
 }
 
-// FetchLogsHandler returns logs filtered by hostname, time range, and optional limit
+/*
+GET /api/logs/fetch
+UI → Server (QUERY)
+*/
 func FetchLogsHandler(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Parse query parameters
-		hostname := r.URL.Query().Get("hostname")
+
+		// ✅ Query params
 		accountID := r.URL.Query().Get("account_id")
+		agentID := r.URL.Query().Get("agent_id")
+		hostname := r.URL.Query().Get("hostname")
 		level := r.URL.Query().Get("level")
 
-		startTsStr := r.URL.Query().Get("start")
-		endTsStr := r.URL.Query().Get("end")
-		limitStr := r.URL.Query().Get("limit")
+		if accountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
 
+		// Time range
 		var start, end time.Time
-		var limit int
-		var err error
 
-		if startTsStr != "" {
-			ts, err := strconv.ParseInt(startTsStr, 10, 64)
-			if err == nil {
+		if v := r.URL.Query().Get("start"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
 				start = time.Unix(ts, 0)
 			}
 		}
-		if endTsStr != "" {
-			ts, err := strconv.ParseInt(endTsStr, 10, 64)
-			if err == nil {
+
+		if v := r.URL.Query().Get("end"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
 				end = time.Unix(ts, 0)
 			}
 		}
-		if limitStr != "" {
-			limit, err = strconv.Atoi(limitStr)
-			if err != nil {
-				limit = 100
+
+		limit := 100
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
 			}
-		} else {
-			limit = 100
 		}
 
 		logs, err := s.GetLogs(
 			accountID,
 			hostname,
-			"",
+			agentID,
 			start,
 			end,
 			level,
@@ -83,6 +106,6 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(logs)
+		_ = json.NewEncoder(w).Encode(logs)
 	}
 }

@@ -1,0 +1,2018 @@
+===== FILE: ./ui/static/hosts.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>OpsLens Pulse</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+  <header class="topbar">
+    <h1>🖥️ OpsLens Pulse</h1>
+    <small id="apiKeyInfo"></small>
+  </header>
+
+  <!-- HOST LIST -->
+  <table id="hostsTable">
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Status</th>
+        <th>Last Seen</th>
+        <th>IP</th>
+        <th>OS</th>
+        <th>Tags</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <!-- HOST DETAILS -->
+  <div id="hostDetails" style="display:none">
+    <button id="backBtn" class="back-btn">⬅ Back</button>
+
+    <h2 id="detailsHostname"></h2>
+
+    <div class="panel grid-3">
+      <div>
+        <label>Status</label>
+        <div id="detailsStatus"></div>
+      </div>
+      <div>
+        <label>CPU</label>
+        <div class="bar">
+          <div id="cpuBar" class="bar-fill"></div>
+        </div>
+        <span id="detailsCPU"></span>%
+      </div>
+      <div>
+        <label>Memory</label>
+        <div class="bar">
+          <div id="memBar" class="bar-fill mem"></div>
+        </div>
+        <span id="detailsMem"></span> MB
+      </div>
+    </div>
+
+    <div class="panel">
+      <label>Uptime</label>
+      <div id="detailsUptime"></div>
+      <label>Tags</label>
+      <div id="detailsTags"></div>
+    </div>
+
+    <div class="panel">
+      <h3>📜 Host Logs</h3>
+      <div id="hostLogs" class="log-box"></div>
+    </div>
+
+    <div class="panel">
+      <h3>🐳 Containers</h3>
+      <table id="containersTable">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Image</th>
+            <th>Status</th>
+            <th>CPU</th>
+            <th>Memory</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="/static/hosts.js"></script>
+</body>
+</html>
+
+===== FILE: ./ui/static/index.html =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>OpsLens Login</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="login-page-wrapper">
+    <div class="login-container">
+      <h1>OpsLens Pulse</h1>
+      <input id="apiKey" type="password" placeholder="Paste API Key" />
+      <button id="loginBtn">Login</button>
+      <div id="error" class="error"></div>
+    </div>
+  </div>
+
+  <script src="/static/login.js"></script>
+</body>
+</html>
+
+===== FILE: ./ui/static/hosts.js =====
+const API_TOKEN = sessionStorage.getItem("apiKey")
+if (!API_TOKEN) location.href = "/index.html"
+
+document.getElementById("apiKeyInfo").textContent =
+  "API Key: ****" + API_TOKEN.slice(-4)
+
+const hostsTbody = document.querySelector("#hostsTable tbody")
+const containersTbody = document.querySelector("#containersTable tbody")
+
+let hosts = []
+let summaryCache = {}
+let currentAgentId = null
+let detailsTimer = null
+let containersLoadedFor = null
+
+const REFRESH = 5000
+
+/* ---------------- UTIL ---------------- */
+
+function timeAgo(ts) {
+  if (!ts) return "—"
+  const diff = Math.floor((Date.now() - new Date(ts)) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 31536000) return `${Math.floor(diff / 86400)}d ago`
+  return `${Math.floor(diff / 31536000)}y ago`
+}
+
+function renderTags(tags) {
+  if (!tags || typeof tags !== "object") return "—"
+  return Object.entries(tags)
+    .map(([k, v]) => `<span class="tag">${k}:${v}</span>`)
+    .join(" ")
+}
+
+/* ---------------- HOST LIST ---------------- */
+
+function renderHosts() {
+  hostsTbody.innerHTML = ""
+  hosts.forEach(h => {
+    const tr = document.createElement("tr")
+    tr.innerHTML = `
+      <td class="link">
+        <span class="dot ${h.alive ? "alive" : "dead"}"></span>
+        ${h.hostname}
+      </td>
+      <td class="${h.alive ? "alive" : "dead"}">${h.alive ? "Alive" : "Down"}</td>
+      <td>${timeAgo(h.last_seen)}</td>
+      <td>${h.ip || "—"}</td>
+      <td>${h.os || "—"}</td>
+      <td>${renderTags(h.tags)}</td>
+    `
+    tr.querySelector(".link").onclick = () => openHost(h.agent_id)
+    hostsTbody.appendChild(tr)
+  })
+}
+
+async function loadHosts() {
+  const res = await fetch("/api/hosts", {
+    headers: { Authorization: "Bearer " + API_TOKEN }
+  })
+  hosts = await res.json()
+
+  const summaryRes = await fetch("/api/hosts/summary", {
+    headers: { Authorization: "Bearer " + API_TOKEN }
+  })
+  summaryCache = await summaryRes.json()
+
+  hosts = hosts.map(h => {
+    const s = summaryCache[h.agent_id]
+    if (!s) return h
+    return {
+      ...h,
+      cpu_percent: s.cpu_percent,
+      mem_used_mb: s.mem_used_mb,
+      mem_total_mb: s.mem_total_mb,
+      uptime_sec: s.uptime_sec
+    }
+  })
+
+  renderHosts()
+}
+
+setInterval(loadHosts, REFRESH)
+loadHosts()
+
+/* ---------------- HOST DETAILS ---------------- */
+
+function openHost(agentId) {
+  currentAgentId = agentId
+  containersLoadedFor = null
+
+  document.getElementById("hostsTable").style.display = "none"
+  document.getElementById("hostDetails").style.display = "block"
+
+  refreshHostDetails()
+  loadContainersOnce()
+
+  detailsTimer = setInterval(refreshHostDetails, REFRESH)
+}
+
+function refreshHostDetails() {
+  if (!currentAgentId) return
+
+  const host = hosts.find(h => h.agent_id === currentAgentId)
+  if (!host) return
+
+  document.getElementById("detailsHostname").textContent = host.hostname
+  document.getElementById("detailsStatus").textContent =
+    host.alive ? "🟢 Alive" : "🔴 Down"
+
+  document.getElementById("detailsCPU").textContent =
+    typeof host.cpu_percent === "number"
+      ? host.cpu_percent.toFixed(1)
+      : "—"
+
+  document.getElementById("detailsMem").textContent =
+    host.mem_used_mb ?? "—"
+
+  document.getElementById("detailsUptime").textContent =
+    host.uptime_sec
+      ? `${Math.floor(host.uptime_sec / 60)} min`
+      : "—"
+
+  document.getElementById("detailsTags").innerHTML =
+    renderTags(host.tags)
+
+  loadLogs()
+}
+
+document.getElementById("backBtn").onclick = () => {
+  if (detailsTimer) {
+    clearInterval(detailsTimer)
+    detailsTimer = null
+  }
+
+  currentAgentId = null
+  containersLoadedFor = null
+
+  document.getElementById("hostDetails").style.display = "none"
+  document.getElementById("hostsTable").style.display = "table"
+}
+
+/* ---------------- LOGS ---------------- */
+
+async function loadLogs() {
+  if (!currentAgentId) return
+
+  const box = document.getElementById("hostLogs")
+
+  let res
+  try {
+    res = await fetch(`/api/logs/fetch?agent_id=${currentAgentId}`, {
+      headers: { Authorization: "Bearer " + API_TOKEN }
+    })
+  } catch (e) {
+    console.warn("Logs fetch failed:", e)
+    box.innerHTML = "<span class='muted'>Unable to reach logs service</span>"
+    return
+  }
+
+  // Handle HTTP errors
+  if (!res.ok) {
+    box.innerHTML =
+      `<span class='muted'>Logs unavailable (${res.status})</span>`
+    return
+  }
+
+  let data
+  try {
+    data = await res.json()
+  } catch (e) {
+    console.warn("Invalid JSON from logs API:", e)
+    box.innerHTML = "<span class='muted'>Invalid logs response</span>"
+    return
+  }
+
+  // Support multiple response shapes safely
+  const logs = Array.isArray(data?.logs)
+    ? data.logs
+    : Array.isArray(data)
+    ? data
+    : []
+
+  if (!logs.length) {
+    box.innerHTML = "<span class='muted'>No logs found</span>"
+    return
+  }
+
+  box.innerHTML = logs
+    .map(l => {
+      const ts = l.timestamp
+        ? new Date(l.timestamp * 1000).toLocaleString()
+        : "—"
+      const level = l.level || "info"
+      const msg = l.message || ""
+      return `${ts} [${level}] ${msg}`
+    })
+    .join("<br/>")
+}
+
+
+
+/* ---------------- CONTAINERS (ONCE ONLY) ---------------- */
+
+async function loadContainersOnce() {
+  if (!currentAgentId) return
+  if (containersLoadedFor === currentAgentId) return
+
+  containersLoadedFor = currentAgentId
+
+  let res
+  try {
+    res = await fetch(`/api/containers?agent_id=${currentAgentId}`, {
+      headers: { Authorization: "Bearer " + API_TOKEN }
+    })
+  } catch {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Containers API unreachable</td></tr>`
+    return
+  }
+
+  if (!res.ok) {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Containers not supported</td></tr>`
+    return
+  }
+
+  let containers = []
+  try {
+    containers = await res.json()
+  } catch {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Invalid containers response</td></tr>`
+    return
+  }
+
+  containersTbody.innerHTML = containers.length
+    ? containers.map(c => `
+        <tr>
+          <td>${c.name}</td>
+          <td>${c.image}</td>
+          <td>${c.status}</td>
+          <td>${c.cpu_percent?.toFixed(1) ?? "—"}%</td>
+          <td>${c.mem_used_mb ?? "—"} MB</td>
+        </tr>
+      `).join("")
+    : `<tr><td colspan="5" class="muted">No containers detected</td></tr>`
+}
+
+
+===== FILE: ./ui/static/styles.css =====
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0b1220;
+  color: #e5e7eb;
+  padding: 20px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+h1 {
+  font-size: 22px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+th, td {
+  padding: 10px;
+  border-bottom: 1px solid #1e293b;
+}
+
+tbody tr:hover {
+  background: #020617;
+}
+
+.alive { color: #22c55e; }
+.dead { color: #ef4444; }
+
+.dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 6px;
+}
+
+.dot.alive { background: #22c55e; }
+.dot.dead { background: #ef4444; }
+
+.link {
+  cursor: pointer;
+  color: #93c5fd;
+}
+
+.link:hover { text-decoration: underline; }
+
+.panel {
+  margin-top: 16px;
+  padding: 14px;
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+label {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.bar {
+  height: 6px;
+  background: #1e293b;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 6px 0;
+}
+
+.bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  transition: width 0.3s ease;
+}
+
+.bar-fill.mem {
+  background: #22c55e;
+}
+
+.tag {
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  padding: 2px 6px;
+  margin-right: 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.log-box {
+  background: #000814;
+  font-family: monospace;
+  font-size: 13px;
+  padding: 10px;
+  height: 200px;
+  overflow-y: auto;
+}
+
+.muted {
+  color: #64748b;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+===== FILE: ./ui/static/login.js =====
+const loginBtn = document.getElementById("loginBtn")
+const apiKeyInput = document.getElementById("apiKey")
+const errorBox = document.getElementById("error")
+
+loginBtn.addEventListener("click", () => {
+  const apiKey = apiKeyInput.value.trim()
+
+  if (!apiKey) {
+    errorBox.textContent = "API key is required"
+    return
+  }
+
+  //save API key in session storage and redirect to hosts page
+  sessionStorage.setItem("apiKey", apiKey)
+  sessionStorage.setItem("loggedIn", "true")
+  window.location.href = "/hosts.html"
+
+})
+
+// auto-redirect if already logged in
+if (sessionStorage.getItem("apiKey") && sessionStorage.getItem("loggedIn") === "true") {
+  window.location.href = "/hosts.html"
+}
+
+===== FILE: ./config/config.go =====
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ServerConfig struct {
+	ListenPort int `yaml:"listen_port"`
+}
+
+type ClickHouseConfig struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+}
+
+func LoadClickHouse() ClickHouseConfig {
+	cfg := ClickHouseConfig{
+		Host:     os.Getenv("CLICKHOUSE_HOST"),
+		Port:     9000,
+		User:     os.Getenv("CLICKHOUSE_USER"),
+		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
+		Database: os.Getenv("CLICKHOUSE_DATABASE"),
+	}
+	if port := os.Getenv("CLICKHOUSE_PORT"); port != "" {
+		fmt.Sscanf(port, "%d", &cfg.Port)
+	}
+	return cfg
+}
+
+//	func (c ClickHouseConfig) DSN() string {
+//		return fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s",
+//			c.Host, c.Port, c.User, c.Password, c.Database)
+//	}
+func (c ClickHouseConfig) DSN() string {
+	if c.Database == "" {
+		c.Database = "default"
+	}
+	return fmt.Sprintf(
+		"tcp://%s:%d/%s?username=%s&password=%s",
+		c.Host,
+		c.Port,
+		c.Database,
+		c.User,
+		c.Password,
+	)
+}
+
+var DefaultPath string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		DefaultPath = `C:\ProgramData\OpsLens-Pulse\server-config.yaml`
+	} else {
+		DefaultPath = "/etc/opslens-pulse/server-config.yaml"
+	}
+}
+
+// LoadOrCreate returns: ServerConfig, path, created(bool), error
+func LoadOrCreate(path string) (ServerConfig, string, bool, error) {
+	var cfg ServerConfig
+
+	if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
+		path = env
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// create default config
+		cfg = ServerConfig{
+			ListenPort: 9898,
+		}
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+
+		return cfg, path, true, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return cfg, path, false, err
+	}
+	defer f.Close()
+
+	err = yaml.NewDecoder(f).Decode(&cfg)
+	return cfg, path, false, err
+}
+
+func save(path string, cfg ServerConfig) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return yaml.NewEncoder(f).Encode(cfg)
+}
+
+func (c ServerConfig) Validate() error {
+	if c.ListenPort <= 0 || c.ListenPort > 65535 {
+		return errors.New("listen_port must be between 1 and 65535")
+	}
+	return nil
+}
+
+===== FILE: ./api/token.go =====
+package api
+
+var authToken string
+
+func SetAuthToken(t string) {
+	authToken = t
+}
+
+func GetAuthToken() string {
+	return authToken
+}
+
+===== FILE: ./api/metrics.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func MetricsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var metrics shared.HostMetrics
+		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := store.UpsertAgentMetadata(metrics); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		if err := store.SaveMetrics(metrics); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./api/hosts.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"opslense-pulse/server/store"
+)
+
+func HostsHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accountID := r.URL.Query().Get("account_id")
+		if accountID == "" {
+			accountID = "default"
+		}
+
+		agents, err := st.ListAgents(accountID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(agents)
+	}
+}
+
+func HostSummaryHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accountID := r.URL.Query().Get("account_id")
+		if accountID == "" {
+			accountID = "default"
+		}
+
+		data, err := st.GetLatestHostMetrics(accountID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+===== FILE: ./api/logs.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+	"strconv"
+	"time"
+)
+
+/*
+POST /api/logs
+Agent → Server (INSERT)
+*/
+func LogsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var batch shared.LogBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if batch.AccountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+		if batch.AgentID == "" {
+			http.Error(w, "missing agent_id", http.StatusBadRequest)
+			return
+		}
+		if batch.Hostname == "" {
+			http.Error(w, "missing hostname", http.StatusBadRequest)
+			return
+		}
+
+		if err := store.InsertLogs(batch); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+/*
+GET /api/logs/fetch
+UI → Server (QUERY)
+*/
+func FetchLogsHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		// ✅ Query params
+		accountID := r.URL.Query().Get("account_id")
+		agentID := r.URL.Query().Get("agent_id")
+		hostname := r.URL.Query().Get("hostname")
+		level := r.URL.Query().Get("level")
+
+		if accountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+
+		// Time range
+		var start, end time.Time
+
+		if v := r.URL.Query().Get("start"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+				start = time.Unix(ts, 0)
+			}
+		}
+
+		if v := r.URL.Query().Get("end"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+				end = time.Unix(ts, 0)
+			}
+		}
+
+		limit := 100
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
+			}
+		}
+
+		logs, err := s.GetLogs(
+			accountID,
+			hostname,
+			agentID,
+			start,
+			end,
+			level,
+			limit,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(logs)
+	}
+}
+
+===== FILE: ./api/container.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func ContainerMetricsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var metrics shared.ContainerMetrics
+		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if metrics.AccountID == "" || metrics.ContainerID == "" {
+			http.Error(w, "missing account_id or container_id", http.StatusBadRequest)
+			return
+		}
+		if err := store.SaveContainerMetrics(metrics); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func ContainerLogsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var batch shared.ContainerLogBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if batch.AccountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+		if err := store.InsertContainerLogs(batch); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./api/heartbeat.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func HeartbeatHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var hb shared.Heartbeat
+		if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+			http.Error(w, "invalid payload", 400)
+			return
+		}
+
+		if hb.Timestamp.IsZero() {
+			hb.Timestamp = time.Now()
+		}
+
+		if err := st.UpsertAgentHeartbeat(hb); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./main.go =====
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"github.com/google/uuid"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"opslense-pulse/server/api"
+	"opslense-pulse/server/config"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+const ServerVersion = "1.0.0"
+
+// -------------------------------------------
+// Helpers
+// -------------------------------------------
+
+// Print CLI help
+func printHelp() {
+	fmt.Print(`
+OpsLens-Pulse Server
+
+Usage:
+  opslens-pulse-server [options]
+
+Options:
+  --config <path>     Path to config file
+  --version           Show version
+  --help              Show help
+
+Defaults:
+  Linux:   /etc/opslens-pulse/server-config.yaml
+  Windows: C:\ProgramData\OpsLens-Pulse\server-config.yaml
+
+Env:
+  OPS_SERVER_CONFIG
+`)
+}
+
+// Generate a random API key
+func generateAPIKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return "opl_" + hex.EncodeToString(b)
+}
+
+// Hash API key (SHA256)
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+// Bootstrap API key if DB is empty
+func bootstrapAPIKeyIfNeeded(s store.Store) error {
+	count, err := s.CountAPIKeys()
+	if err != nil {
+		return err
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	rawKey := generateAPIKey()
+	hash := hashAPIKey(rawKey)
+
+	err = s.InsertAPIKey(shared.APIKey{
+		AccountID:   "default",
+		KeyID:       uuid.NewString(),
+		KeyHash:     hash,
+		Name:        "bootstrap-admin",
+		IsActive:    1,
+		IsBootstrap: 1,
+		CreatedAt:   time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("========================================")
+	fmt.Println(" OpsLens Pulse – Bootstrap API Key")
+	fmt.Println("========================================")
+	fmt.Println(" THIS KEY IS SHOWN ONLY ONCE")
+	fmt.Println()
+	fmt.Println(" API KEY:")
+	fmt.Println(" ", rawKey)
+	fmt.Println()
+	fmt.Println(" Store it securely. It cannot be recovered.")
+	fmt.Println("========================================")
+
+	return nil
+}
+
+// Auth wrapper for API handlers
+func makeAuthHandler(st store.Store, handler func(store.Store) http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		rawKey := strings.TrimPrefix(header, "Bearer ")
+		ok, err := st.ValidateAPIKey(rawKey)
+		if err != nil || !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), "account_id", "default")
+		handler(st)(w, r.WithContext(ctx))
+	}
+}
+
+// -------------------------------------------
+// Main
+// -------------------------------------------
+
+func main() {
+	shared.InitLogger("server")
+	log.Println("🚀 OpsLens-Pulse Server starting...")
+
+	// CLI flags
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Path to config file")
+	showHelp := flag.Bool("help", false, "Help")
+	showVersion := flag.Bool("version", false, "Version")
+	flag.Parse()
+
+	if *showHelp {
+		printHelp()
+		return
+	}
+	if *showVersion {
+		fmt.Println(ServerVersion)
+		return
+	}
+
+	// Load server config
+	cfg, path, created, err := config.LoadOrCreate(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("📄 Server config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Server config loaded from: %s\n", path)
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid server config: %v", err)
+	}
+
+	// -------------------------------
+	// Connect to ClickHouse or fallback to MemoryStore
+	// -------------------------------
+	var st store.Store
+	chcfg := config.LoadClickHouse()
+	chStore, err := store.NewClickHouseStore(chcfg.DSN())
+	if err != nil {
+		log.Println("ClickHouse unavailable, falling back to MemoryStore:", err)
+		st = store.NewMemoryStore()
+	} else {
+		st = chStore
+	}
+
+	// Bootstrap API key
+	if err := bootstrapAPIKeyIfNeeded(st); err != nil {
+		log.Fatalf("Failed to bootstrap API key: %v", err)
+	}
+
+	// -------------------------------
+	// Serve static files
+	// -------------------------------
+	fs := http.FileServer(http.Dir("./server/ui/static"))
+	http.Handle("/static/", http.StripPrefix("/static/", fs))
+
+	// Serve HTML
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		} else if !strings.HasSuffix(path, ".html") {
+			path += ".html"
+		}
+		http.ServeFile(w, r, "./server/ui/static"+path)
+	})
+
+	// -------------------------------
+	// API routes - WITH AUTHENTICATION
+	// -------------------------------
+	http.HandleFunc("/api/metrics", makeAuthHandler(st, api.MetricsHandler))
+	http.HandleFunc("/api/heartbeat", makeAuthHandler(st, api.HeartbeatHandler))
+	http.HandleFunc("/api/hosts", makeAuthHandler(st, api.HostsHandler))
+	http.HandleFunc("/api/hosts/summary", makeAuthHandler(st, api.HostSummaryHandler))
+	http.HandleFunc("/api/logs", makeAuthHandler(st, api.LogsHandler))
+	http.HandleFunc("/api/logs/fetch", makeAuthHandler(st, api.FetchLogsHandler))
+	http.HandleFunc("/api/container/metrics", makeAuthHandler(st, api.ContainerMetricsHandler))
+	http.HandleFunc("/api/container/logs", makeAuthHandler(st, api.ContainerLogsHandler))
+
+	// -------------------------------
+	// Start server
+	// -------------------------------
+	addr := fmt.Sprintf(":%d", cfg.ListenPort)
+	log.Println("Server listening on", addr)
+
+	srv := &http.Server{
+		Addr:           addr,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// -------------------------------
+	// Graceful shutdown
+	// -------------------------------
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+	log.Println("Server stopped")
+}
+
+===== FILE: ./store/types.go =====
+package store
+
+import "opslense-pulse/shared"
+
+type HostState struct {
+	IP       string
+	Metrics  shared.HostMetrics
+	Logs     []shared.LogEntry
+	LastSeen int64
+}
+
+===== FILE: ./store/memory_store.go =====
+package store
+
+import (
+	"opslense-pulse/shared"
+	"sync"
+	"time"
+)
+
+// -------------------------------
+// MemoryStore struct
+// -------------------------------
+type MemoryStore struct {
+	mu         sync.RWMutex
+	hosts      map[string]*HostState
+	apiKeys    map[string]shared.APIKey
+	containers map[string]*ContainerState
+}
+
+type ContainerState struct {
+	Metrics  shared.ContainerMetrics
+	Logs     []string
+	LastSeen time.Time
+}
+
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		hosts:      make(map[string]*HostState),
+		apiKeys:    make(map[string]shared.APIKey),
+		containers: make(map[string]*ContainerState),
+	}
+}
+
+func (m *MemoryStore) SaveContainerMetrics(metrics shared.ContainerMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := metrics.Hostname + ":" + metrics.ContainerID
+	c, ok := m.containers[key]
+	if !ok {
+		c = &ContainerState{}
+		m.containers[key] = c
+	}
+	c.Metrics = metrics
+	c.LastSeen = time.Now()
+	return nil
+}
+
+func (m *MemoryStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, l := range batch.Logs {
+		key := batch.Hostname + ":" + l.ContainerID
+		c, ok := m.containers[key]
+		if !ok {
+			c = &ContainerState{}
+			m.containers[key] = c
+		}
+
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		c.Logs = append(c.Logs, l.Message+" ["+t.Format("2006-01-02 15:04:05")+"]")
+		c.LastSeen = t
+	}
+	return nil
+}
+
+// -------------------------------
+// SaveMetrics: store host metrics
+// -------------------------------
+func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[metrics.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[metrics.Hostname] = h
+	}
+
+	h.Metrics = metrics
+	h.LastSeen = time.Now().Unix()
+
+	if ip, ok := metrics.Tags["ip"]; ok {
+		h.IP = ip
+	}
+
+	return nil
+}
+
+// -------------------------------
+// Logs
+// -------------------------------
+func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[batch.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[batch.Hostname] = h
+	}
+
+	for _, l := range batch.Logs {
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		h.Logs = append(h.Logs, shared.LogEntry{
+			AccountID: l.AccountID,
+			AgentID:   l.AgentID,
+			Hostname:  l.Hostname,
+			Level:     l.Level,
+			Message:   l.Message + " [" + t.Format("2006-01-02 15:04:05") + "]",
+			Timestamp: l.Timestamp,
+			Tags:      l.Tags,
+		})
+	}
+	return nil
+}
+
+// -------------------------------
+// Fetch logs
+// -------------------------------
+func (m *MemoryStore) GetLogs(
+	accountID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	h, ok := m.hosts[hostname]
+	if !ok {
+		return []shared.LogEntry{}, nil
+	}
+
+	var logs []shared.LogEntry
+	for _, l := range h.Logs {
+
+		if accountID != "" && l.AccountID != accountID {
+			continue
+		}
+		if agentID != "" && l.AgentID != agentID {
+			continue
+		}
+		if level != "" && l.Level != level {
+			continue
+		}
+
+		t := time.Unix(l.Timestamp, 0)
+		if !from.IsZero() && t.Before(from) {
+			continue
+		}
+		if !to.IsZero() && t.After(to) {
+			continue
+		}
+
+		logs = append(logs, l)
+		if limit > 0 && len(logs) >= limit {
+			break
+		}
+	}
+	return logs, nil
+}
+
+// -------------------------------
+// API Keys
+// -------------------------------
+func (m *MemoryStore) CountAPIKeys() (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.apiKeys), nil
+}
+
+func (m *MemoryStore) InsertAPIKey(k shared.APIKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.apiKeys[k.KeyHash] = k
+	return nil
+}
+
+func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, error) {
+	hash := hashAPIKey(rawKey)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.apiKeys[hash]
+	return ok, nil
+}
+
+func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[hb.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[hb.Hostname] = h
+	}
+	h.LastSeen = hb.Timestamp.Unix()
+	return nil
+}
+
+func (m *MemoryStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var agents []shared.AgentInfo
+
+	for hostname, h := range m.hosts {
+		agents = append(agents, shared.AgentInfo{
+			AccountID: accountID,
+			Hostname:  hostname,
+			LastSeen:  time.Unix(h.LastSeen, 0),
+		})
+	}
+
+	return agents, nil
+}
+
+func (m *MemoryStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Memory store does not persist time-series metrics
+	// Return empty map so UI still works
+	return map[string]shared.HostMetrics{}, nil
+}
+
+func (m *MemoryStore) UpsertAgentMetadata(hm shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.hosts[hm.AgentID]
+	if !ok {
+		// first time we see this agent
+		state = &HostState{
+			Metrics:  hm,
+			LastSeen: time.Now().Unix(),
+		}
+		m.hosts[hm.AgentID] = state
+	} else {
+		// update metadata only
+		state.Metrics.Hostname = hm.Hostname
+		state.Metrics.IP = hm.IP
+		state.Metrics.OS = hm.OS
+		state.Metrics.Tags = hm.Tags
+	}
+
+	return nil
+}
+
+var _ Store = (*MemoryStore)(nil)
+
+===== FILE: ./store/store_interface.go =====
+package store
+
+import (
+	"opslense-pulse/shared"
+	"time"
+)
+
+type Store interface {
+	// Ingest
+	SaveMetrics(m shared.HostMetrics) error
+	InsertLogs(batch shared.LogBatch) error
+	SaveContainerMetrics(m shared.ContainerMetrics) error
+	InsertContainerLogs(batch shared.ContainerLogBatch) error
+	UpsertAgentHeartbeat(hb shared.Heartbeat) error
+	UpsertAgentMetadata(m shared.HostMetrics) error
+	ListAgents(accountID string) ([]shared.AgentInfo, error)
+	GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error)
+
+	// Query
+	GetLogs(
+		accountID string,
+		hostname string,
+		agentID string,
+		from, to time.Time,
+		level string,
+		limit int,
+	) ([]shared.LogEntry, error)
+
+	// API keys
+	InsertAPIKey(k shared.APIKey) error
+	ValidateAPIKey(rawKey string) (bool, error)
+	CountAPIKeys() (int, error)
+}
+
+===== FILE: ./store/clickhouse_store.go =====
+package store
+
+import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"time"
+
+	_ "github.com/ClickHouse/clickhouse-go/v2"
+	"opslense-pulse/shared"
+)
+
+// -------------------------------
+// ClickHouseStore
+// -------------------------------
+type ClickHouseStore struct {
+	db *sql.DB
+}
+
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewClickHouseStore(dsn string) (*ClickHouseStore, error) {
+	db, err := sql.Open("clickhouse", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(15 * time.Minute)
+
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
+	return &ClickHouseStore{db: db}, nil
+}
+
+// -------------------------------
+// API Keys
+// -------------------------------
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+func (c *ClickHouseStore) CountAPIKeys() (int, error) {
+	row := c.db.QueryRow(`SELECT count() FROM api_keys`)
+	var count uint64
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+func (c *ClickHouseStore) InsertAPIKey(k shared.APIKey) error {
+	_, err := c.db.Exec(`
+		INSERT INTO api_keys
+		(account_id, key_id, key_hash, name, is_active, is_bootstrap, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`,
+		k.AccountID,
+		k.KeyID,
+		k.KeyHash,
+		k.Name,
+		k.IsActive,
+		k.IsBootstrap,
+		time.Now(),
+	)
+	return err
+}
+
+func (c *ClickHouseStore) ValidateAPIKey(rawKey string) (bool, error) {
+	hash := hashAPIKey(rawKey)
+	row := c.db.QueryRow(`
+		SELECT count()
+		FROM api_keys
+		WHERE key_hash = ?
+		  AND is_active = 1
+		LIMIT 1
+	`, hash)
+
+	var count uint64
+	if err := row.Scan(&count); err != nil {
+		return false, err
+	}
+	if count == 0 {
+		return false, errors.New("invalid or inactive api key")
+	}
+	return true, nil
+}
+
+// -------------------------------
+// Host Metrics (time-series ONLY)
+// -------------------------------
+func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	ttl := m.TTLDays
+	if ttl == 0 {
+		ttl = 90
+	}
+
+	ts := time.Now()
+	if m.Timestamp > 0 {
+		if m.Timestamp > 1e12 {
+			ts = time.UnixMilli(m.Timestamp)
+		} else {
+			ts = time.Unix(m.Timestamp, 0)
+		}
+	}
+
+	_, err := c.db.Exec(`
+		INSERT INTO metrics
+		(account_id, agent_id, hostname,
+		 cpu_percent, mem_used_mb, mem_total_mb,
+		 disk_used_mb, disk_total_mb,
+		 network_in_mb, network_out_mb,
+		 uptime_sec, tags, ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.Hostname,
+		m.CPUPercent,
+		m.MemUsedMB,
+		m.MemTotalMB,
+		m.DiskUsedMB,
+		m.DiskTotalMB,
+		m.NetworkInMB,
+		m.NetworkOutMB,
+		m.UptimeSec,
+		string(tagsJSON),
+		ts,
+		ttl,
+	)
+
+	return err
+}
+
+// -------------------------------
+// Logs Query
+// -------------------------------
+func (c *ClickHouseStore) GetLogs(
+	accountID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT
+			agent_id,
+			hostname,
+			timestamp,
+			level,
+			message,
+			tags
+		FROM logs
+		WHERE account_id = ?
+	`
+	args := []any{accountID}
+
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+
+	if hostname != "" {
+		query += " AND hostname = ?"
+		args = append(args, hostname)
+	}
+
+	if !from.IsZero() {
+		query += " AND timestamp >= ?"
+		args = append(args, from)
+	}
+
+	if !to.IsZero() {
+		query += " AND timestamp <= ?"
+		args = append(args, to)
+	}
+
+	if level != "" {
+		query += " AND level = ?"
+		args = append(args, level)
+	}
+
+	query += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return []shared.LogEntry{}, err
+	}
+	defer rows.Close()
+
+	logs := make([]shared.LogEntry, 0)
+
+	for rows.Next() {
+		var le shared.LogEntry
+		var ts time.Time
+		var tagsJSON string
+
+		if err := rows.Scan(
+			&le.AgentID,
+			&le.Hostname,
+			&ts,
+			&le.Level,
+			&le.Message,
+			&tagsJSON,
+		); err != nil {
+			continue
+		}
+
+		le.Timestamp = ts.Unix()
+		le.HumanTime = ts.Format("2006-01-02 15:04:05")
+
+		if tagsJSON != "" {
+			_ = json.Unmarshal([]byte(tagsJSON), &le.Tags)
+		}
+
+		logs = append(logs, le)
+	}
+
+	return logs, nil
+}
+
+// -------------------------------
+// Agent Metadata (identity + tags)
+// -------------------------------
+func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	_, err := c.db.Exec(`
+		INSERT INTO agents
+		(account_id, agent_id, hostname, ip, os, version, environment, tags)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.Hostname,
+		m.IP,
+		m.OS,
+		m.Version,
+		m.Tags["env"],
+		string(tagsJSON),
+	)
+	return err
+}
+
+// -------------------------------
+// Agent Heartbeat
+// -------------------------------
+func (c *ClickHouseStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+	_, err := c.db.Exec(`
+		INSERT INTO agent_heartbeats
+		(account_id, agent_id, last_seen)
+		VALUES (?, ?, ?)
+	`,
+		hb.AccountID,
+		hb.AgentID,
+		hb.Timestamp,
+	)
+	return err
+}
+
+// -------------------------------
+// Hosts Listing (JOIN + alive)
+// -------------------------------
+func (c *ClickHouseStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+	rows, err := c.db.Query(`
+		SELECT
+			a.account_id,
+			a.agent_id,
+			any(a.hostname) AS hostname,
+			any(a.ip) AS ip,
+			any(a.os) AS os,
+			any(a.version) AS version,
+			any(a.environment) AS environment,
+			any(a.tags) AS tags,
+			min(a.first_seen) AS first_seen,
+			max(h.last_seen) AS last_seen
+		FROM agents a
+		LEFT JOIN agent_heartbeats h
+		  ON a.account_id = h.account_id
+		 AND a.agent_id = h.agent_id
+		WHERE a.account_id = ?
+		GROUP BY a.account_id, a.agent_id
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []shared.AgentInfo
+	for rows.Next() {
+		var ai shared.AgentInfo
+		var tagsJSON string
+
+		if err := rows.Scan(
+			&ai.AccountID,
+			&ai.AgentID,
+			&ai.Hostname,
+			&ai.IP,
+			&ai.OS,
+			&ai.Version,
+			&ai.Environment,
+			&tagsJSON,
+			&ai.FirstSeen,
+			&ai.LastSeen,
+		); err != nil {
+			return nil, err
+		}
+
+		_ = json.Unmarshal([]byte(tagsJSON), &ai.Tags)
+		ai.Alive = time.Since(ai.LastSeen) <= 10*time.Second
+
+		out = append(out, ai)
+	}
+
+	return out, nil
+}
+
+// -------------------------------
+// Container Logs
+// -------------------------------
+func (c *ClickHouseStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO container_logs
+		(account_id, agent_id, hostname, container_id, name,
+		 timestamp, level, message, tags, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, l := range batch.Logs {
+		ts := time.Now()
+		if l.Timestamp > 0 {
+			if l.Timestamp > 1e12 {
+				ts = time.UnixMilli(l.Timestamp)
+			} else {
+				ts = time.Unix(l.Timestamp, 0)
+			}
+		}
+
+		level := l.Level
+		if level == "" {
+			level = "info"
+		}
+
+		tagsJSON, _ := json.Marshal(l.Tags)
+
+		ttl := l.TTLDays
+		if ttl == 0 {
+			ttl = 90
+		}
+
+		_, err := stmt.Exec(
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			l.ContainerID,
+			l.ContainerName,
+			ts,
+			level,
+			l.Message,
+			string(tagsJSON),
+			ttl,
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// -------------------------------
+// Host Logs
+// -------------------------------
+func (c *ClickHouseStore) InsertLogs(batch shared.LogBatch) error {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO logs
+		(account_id, agent_id, hostname, timestamp, level, message, tags, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, l := range batch.Logs {
+		ts := time.Now()
+		if l.Timestamp > 0 {
+			if l.Timestamp > 1e12 {
+				ts = time.UnixMilli(l.Timestamp)
+			} else {
+				ts = time.Unix(l.Timestamp, 0)
+			}
+		}
+
+		level := l.Level
+		if level == "" {
+			level = "info"
+		}
+
+		tagsJSON, _ := json.Marshal(l.Tags)
+
+		ttl := l.TTLDays
+		if ttl == 0 {
+			ttl = 90
+		}
+
+		_, err := stmt.Exec(
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			ts,
+			level,
+			l.Message,
+			string(tagsJSON),
+			ttl,
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// -------------------------------
+// Container Metrics
+// -------------------------------
+func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error {
+	ts := time.Now()
+	if m.Timestamp > 0 {
+		if m.Timestamp > 1e12 {
+			ts = time.UnixMilli(m.Timestamp)
+		} else {
+			ts = time.Unix(m.Timestamp, 0)
+		}
+	}
+
+	ttl := m.TTLDays
+	if ttl == 0 {
+		ttl = 90
+	}
+
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	_, err := c.db.Exec(`
+		INSERT INTO container_metrics
+		(account_id, agent_id, container_id, name,
+		 cpu_percent, mem_used_mb, mem_total_mb,
+		 disk_used_mb, disk_total_mb,
+		 network_in_mb, network_out_mb,
+		 tags, ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.ContainerID,
+		m.ContainerName,
+		m.CPUPercent,
+		m.MemUsedMB,
+		m.MemTotalMB,
+		m.DiskUsedMB,
+		m.DiskTotalMB,
+		m.NetworkInMB,
+		m.NetworkOutMB,
+		string(tagsJSON),
+		ts,
+		ttl,
+	)
+
+	return err
+}
+
+func (c *ClickHouseStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+	rows, err := c.db.Query(`
+		SELECT
+			agent_id,
+			hostname,
+			argMax(cpu_percent, ts),
+			argMax(mem_used_mb, ts),
+			argMax(mem_total_mb, ts),
+			argMax(uptime_sec, ts)
+		FROM metrics
+		WHERE account_id = ?
+		GROUP BY agent_id, hostname
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]shared.HostMetrics)
+
+	for rows.Next() {
+		var m shared.HostMetrics
+		if err := rows.Scan(
+			&m.AgentID,
+			&m.Hostname,
+			&m.CPUPercent,
+			&m.MemUsedMB,
+			&m.MemTotalMB,
+			&m.UptimeSec,
+		); err != nil {
+			return nil, err
+		}
+		out[m.AgentID] = m
+	}
+
+	return out, nil
+}
+
+// -------------------------------
+// Interface check
+// -------------------------------
+var _ Store = (*ClickHouseStore)(nil)
+

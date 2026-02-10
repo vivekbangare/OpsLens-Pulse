@@ -3,9 +3,6 @@ package collector
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,56 +10,58 @@ import (
 	"opslense-pulse/agent/sender"
 )
 
-var lastSentLineFile = filepath.Join(BaseDir, "agent_last_line.txt")
-
 // StartLogCollector collects host logs and sends them to the server
 func StartLogCollector(
 	ctx context.Context,
-	agentID, logPath, serverURL, apiKey string,
+	agentID, hostname, logPath, serverURL, apiKey string,
 	intervalSeconds int,
 	accountID string,
 ) {
 	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
 	defer ticker.Stop()
 
-	lastSentLine, _ := loadLastLinePosition()
+	fmt.Println("📄 Host log collector started")
+	fmt.Println("   file:", logPath)
+	fmt.Println("   agent:", agentID)
+	fmt.Println("   host:", hostname)
+	fmt.Println("   account:", accountID)
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("Host log collector stopping...")
+			fmt.Println("🛑 Host log collector stopping...")
 			return
 
 		case <-ticker.C:
 			content, err := logs.ReadLastLines(logPath, 50)
 			if err != nil {
-				fmt.Println("Error reading logs:", err)
+				fmt.Println("❌ Error reading logs:", err)
 				continue
 			}
 
-			allLines := splitLines(content)
-			if lastSentLine >= len(allLines) {
+			lines := splitLines(content)
+			if len(lines) == 0 {
 				continue
 			}
-
-			newLines := allLines[lastSentLine:]
-			lastSentLine = len(allLines)
-			_ = saveLastLinePosition(lastSentLine)
 
 			var entries []sender.LogEntry
-			for _, line := range newLines {
+
+			for _, line := range lines {
 				ts, msg, _ := parseLogLine(line)
-				if ts == 0 {
-					ts = time.Now().Unix()
-				}
 				if msg == "" {
-					msg = line
+					continue
 				}
 
 				entries = append(entries, sender.LogEntry{
+					AccountID: accountID,
 					AgentID:   agentID,
+					Hostname:  hostname,
 					Timestamp: ts,
+					Level:     "info",
 					Message:   msg,
+					Tags: map[string]string{
+						"source": "host-log",
+					},
 				})
 			}
 
@@ -70,67 +69,58 @@ func StartLogCollector(
 				continue
 			}
 
+			fmt.Printf(
+				"🚚 Sending host logs: account=%s agent=%s host=%s count=%d\n",
+				accountID,
+				agentID,
+				hostname,
+				len(entries),
+			)
+
 			batch := sender.LogBatch{
-				AgentID: agentID,
-				Logs:    entries,
+				AccountID: accountID,
+				AgentID:   agentID,
+				Hostname:  hostname,
+				Logs:      entries,
 			}
 
-			go func(b sender.LogBatch) {
-				if err := retrySend(3, 2*time.Second, func() error {
-					return sender.SendLogs(serverURL, apiKey, b)
-				}); err != nil {
-					fmt.Println("Error sending logs:", err)
-				}
-			}(batch)
+			if err := retrySend(3, 2*time.Second, func() error {
+				return sender.SendLogs(serverURL, apiKey, batch)
+			}); err != nil {
+				fmt.Println("❌ Failed to send logs:", err)
+			}
 		}
 	}
 }
 
-// splitLines splits log content into non-empty lines
+// -----------------------
+// Helpers
+// -----------------------
+
 func splitLines(content string) []string {
-	var raw []string
+	var out []string
 	for _, line := range strings.Split(content, "\n") {
-		if strings.TrimSpace(line) != "" {
-			raw = append(raw, line)
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
 		}
 	}
-	return raw
+	return out
 }
 
-// loadLastLinePosition loads last sent line number from file
-func loadLastLinePosition() (int, error) {
-	data, err := os.ReadFile(lastSentLineFile)
-	if err != nil {
-		return 0, nil
-	}
-	num, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return 0, nil
-	}
-	return num, nil
-}
-
-// saveLastLinePosition saves last sent line number to file
-func saveLastLinePosition(pos int) error {
-	return os.WriteFile(lastSentLineFile, []byte(strconv.Itoa(pos)), 0644)
-}
-
-// retrySend retries the provided function with exponential backoff
-// func retrySend(attempts int, baseDelay time.Duration, fn func() error) error {
-// 	delay := baseDelay
-// 	for i := 0; i < attempts; i++ {
-// 		if err := fn(); err != nil {
-// 			time.Sleep(delay)
-// 			delay *= 2
-// 		} else {
-// 			return nil
-// 		}
-// 	}
-// 	return fmt.Errorf("all retries failed")
-// }
-
-// parseLogLine is a placeholder for parsing timestamp from log line
 func parseLogLine(line string) (int64, string, error) {
-	// TODO: implement proper timestamp extraction if needed
-	return 0, line, nil
+	// Expected: "YYYY-MM-DD HH:MM:SS message"
+	if len(line) < 20 {
+		return time.Now().Unix(), line, nil
+	}
+
+	tsPart := line[:19]
+	msg := strings.TrimSpace(line[19:])
+
+	t, err := time.Parse("2006-01-02 15:04:05", tsPart)
+	if err != nil {
+		return time.Now().Unix(), line, nil
+	}
+
+	return t.Unix(), msg, nil
 }

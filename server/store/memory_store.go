@@ -139,38 +139,40 @@ func (m *MemoryStore) GetLogs(
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	h, ok := m.hosts[hostname]
-	if !ok {
-		return nil, nil
+	var out []shared.LogEntry
+
+	for _, h := range m.hosts {
+		for _, l := range h.Logs {
+
+			if accountID != "" && l.AccountID != accountID {
+				continue
+			}
+			if agentID != "" && l.AgentID != agentID {
+				continue
+			}
+			if hostname != "" && l.Hostname != hostname {
+				continue
+			}
+			if level != "" && l.Level != level {
+				continue
+			}
+
+			t := time.Unix(l.Timestamp, 0)
+			if !from.IsZero() && t.Before(from) {
+				continue
+			}
+			if !to.IsZero() && t.After(to) {
+				continue
+			}
+
+			out = append(out, l)
+			if limit > 0 && len(out) >= limit {
+				return out, nil
+			}
+		}
 	}
 
-	var logs []shared.LogEntry
-	for _, l := range h.Logs {
-
-		if accountID != "" && l.AccountID != accountID {
-			continue
-		}
-		if agentID != "" && l.AgentID != agentID {
-			continue
-		}
-		if level != "" && l.Level != level {
-			continue
-		}
-
-		t := time.Unix(l.Timestamp, 0)
-		if !from.IsZero() && t.Before(from) {
-			continue
-		}
-		if !to.IsZero() && t.After(to) {
-			continue
-		}
-
-		logs = append(logs, l)
-		if limit > 0 && len(logs) >= limit {
-			break
-		}
-	}
-	return logs, nil
+	return out, nil
 }
 
 // -------------------------------
@@ -226,3 +228,37 @@ func (m *MemoryStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
 
 	return agents, nil
 }
+
+func (m *MemoryStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Memory store does not persist time-series metrics
+	// Return empty map so UI still works
+	return map[string]shared.HostMetrics{}, nil
+}
+
+func (m *MemoryStore) UpsertAgentMetadata(hm shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.hosts[hm.AgentID]
+	if !ok {
+		// first time we see this agent
+		state = &HostState{
+			Metrics:  hm,
+			LastSeen: time.Now().Unix(),
+		}
+		m.hosts[hm.AgentID] = state
+	} else {
+		// update metadata only
+		state.Metrics.Hostname = hm.Hostname
+		state.Metrics.IP = hm.IP
+		state.Metrics.OS = hm.OS
+		state.Metrics.Tags = hm.Tags
+	}
+
+	return nil
+}
+
+var _ Store = (*MemoryStore)(nil)

@@ -1,146 +1,254 @@
-const tbody = document.querySelector("#hosts tbody")
-const containersTbody = document.querySelector("#containers tbody")
-
-let hostsData = []
-let currentAgentId = null
-let currentContainerId = null
-
 const API_TOKEN = sessionStorage.getItem("apiKey")
-const REFRESH_INTERVAL = 5000
-
-if (!API_TOKEN) window.location.href = "/index.html"
+if (!API_TOKEN) location.href = "/index.html"
 
 document.getElementById("apiKeyInfo").textContent =
   "API Key: ****" + API_TOKEN.slice(-4)
 
+const hostsTbody = document.querySelector("#hostsTable tbody")
+const containersTbody = document.querySelector("#containersTable tbody")
+
+let hosts = []
+let summaryCache = {}
+let currentAgentId = null
+let detailsTimer = null
+let containersLoadedFor = null
+
+const REFRESH = 5000
+
+/* ---------------- UTIL ---------------- */
+
+function timeAgo(ts) {
+  if (!ts) return "—"
+  const diff = Math.floor((Date.now() - new Date(ts)) / 1000)
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  if (diff < 31536000) return `${Math.floor(diff / 86400)}d ago`
+  return `${Math.floor(diff / 31536000)}y ago`
+}
+
+function renderTags(tags) {
+  if (!tags || typeof tags !== "object") return "—"
+  return Object.entries(tags)
+    .map(([k, v]) => `<span class="tag">${k}:${v}</span>`)
+    .join(" ")
+}
+
 /* ---------------- HOST LIST ---------------- */
 
-function renderHosts(data) {
-  tbody.innerHTML = ""
-  data.forEach(h => {
+function renderHosts() {
+  hostsTbody.innerHTML = ""
+  hosts.forEach(h => {
     const tr = document.createElement("tr")
     tr.innerHTML = `
-      <td class="link">${h.hostname}</td>
+      <td class="link">
+        <span class="dot ${h.alive ? "alive" : "dead"}"></span>
+        ${h.hostname}
+      </td>
       <td class="${h.alive ? "alive" : "dead"}">${h.alive ? "Alive" : "Down"}</td>
-      <td>${new Date(h.last_seen).toLocaleString()}</td>
+      <td>${timeAgo(h.last_seen)}</td>
+      <td>${h.ip || "—"}</td>
+      <td>${h.os || "—"}</td>
+      <td>${renderTags(h.tags)}</td>
     `
-    tr.querySelector(".link").onclick = () => openHost(h)
-    tbody.appendChild(tr)
+    tr.querySelector(".link").onclick = () => openHost(h.agent_id)
+    hostsTbody.appendChild(tr)
   })
 }
 
-function loadHosts() {
-  fetch("/api/hosts", {
+async function loadHosts() {
+  const res = await fetch("/api/hosts", {
     headers: { Authorization: "Bearer " + API_TOKEN }
   })
-    .then(r => r.json())
-    .then(d => {
-      hostsData = d
-      renderHosts(d)
-    })
+  hosts = await res.json()
+
+  const summaryRes = await fetch("/api/hosts/summary", {
+    headers: { Authorization: "Bearer " + API_TOKEN }
+  })
+  summaryCache = await summaryRes.json()
+
+  hosts = hosts.map(h => {
+    const s = summaryCache[h.agent_id]
+    if (!s) return h
+    return {
+      ...h,
+      cpu_percent: s.cpu_percent,
+      mem_used_mb: s.mem_used_mb,
+      mem_total_mb: s.mem_total_mb,
+      uptime_sec: s.uptime_sec
+    }
+  })
+
+  renderHosts()
 }
 
-setInterval(loadHosts, REFRESH_INTERVAL)
+setInterval(loadHosts, REFRESH)
 loadHosts()
 
 /* ---------------- HOST DETAILS ---------------- */
 
-function openHost(host) {
-  currentAgentId = host.agent_id
+function openHost(agentId) {
+  currentAgentId = agentId
+  containersLoadedFor = null
 
-  document.getElementById("hosts").style.display = "none"
+  document.getElementById("hostsTable").style.display = "none"
   document.getElementById("hostDetails").style.display = "block"
 
+  refreshHostDetails()
+  loadContainersOnce()
+
+  detailsTimer = setInterval(refreshHostDetails, REFRESH)
+}
+
+function refreshHostDetails() {
+  if (!currentAgentId) return
+
+  const host = hosts.find(h => h.agent_id === currentAgentId)
+  if (!host) return
+
   document.getElementById("detailsHostname").textContent = host.hostname
-  document.getElementById("detailsIP").textContent = host.ip || "—"
-  document.getElementById("detailsOS").textContent = host.os || "—"
+  document.getElementById("detailsStatus").textContent =
+    host.alive ? "🟢 Alive" : "🔴 Down"
+
   document.getElementById("detailsCPU").textContent =
-    host.cpu_percent?.toFixed(1) ?? "—"
+    typeof host.cpu_percent === "number"
+      ? host.cpu_percent.toFixed(1)
+      : "—"
+
   document.getElementById("detailsMem").textContent =
     host.mem_used_mb ?? "—"
-  document.getElementById("detailsUptime").textContent =
-    host.uptime_sec ?? "—"
-  document.getElementById("detailsTags").innerHTML = renderTags(host.tags)
 
-  loadHostLogs()
-  loadContainers()
+  document.getElementById("detailsUptime").textContent =
+    host.uptime_sec
+      ? `${Math.floor(host.uptime_sec / 60)} min`
+      : "—"
+
+  document.getElementById("detailsTags").innerHTML =
+    renderTags(host.tags)
+
+  loadLogs()
 }
 
 document.getElementById("backBtn").onclick = () => {
+  if (detailsTimer) {
+    clearInterval(detailsTimer)
+    detailsTimer = null
+  }
+
+  currentAgentId = null
+  containersLoadedFor = null
+
   document.getElementById("hostDetails").style.display = "none"
-  document.getElementById("hosts").style.display = "table"
-  document.getElementById("containerLogsPanel").style.display = "none"
+  document.getElementById("hostsTable").style.display = "table"
 }
 
-/* ---------------- TAG RENDER ---------------- */
+/* ---------------- LOGS ---------------- */
 
-function renderTags(tags = {}) {
-  return Object.entries(tags)
-    .map(([k, v]) => `<span class="tag">${k}:${v}</span>`)
-    .join(" ") || "—"
-}
+async function loadLogs() {
+  if (!currentAgentId) return
 
-/* ---------------- HOST LOGS ---------------- */
+  const box = document.getElementById("hostLogs")
 
-function loadHostLogs() {
-  fetch(`/api/logs/fetch?agent_id=${currentAgentId}`, {
-    headers: { Authorization: "Bearer " + API_TOKEN }
-  })
-    .then(r => r.json())
-    .then(d => {
-      const box = document.getElementById("hostLogs")
-      box.innerHTML = ""
-      d.logs?.forEach(l => {
-        box.innerHTML += `${new Date(l.timestamp * 1000).toISOString()} [${l.level}] ${l.message}<br/>`
-      })
+  let res
+  try {
+    res = await fetch(
+      `/api/logs/fetch?account_id=default&agent_id=${currentAgentId}`,
+      {
+        headers: { Authorization: "Bearer " + API_TOKEN }
+      }
+    )
+  } catch (e) {
+    console.warn("Logs fetch failed:", e)
+    box.innerHTML = "<span class='muted'>Unable to reach logs service</span>"
+    return
+  }
+
+  // Handle HTTP errors
+  if (!res.ok) {
+    box.innerHTML =
+      `<span class='muted'>Logs unavailable (${res.status})</span>`
+    return
+  }
+
+  let data
+  try {
+    data = await res.json()
+  } catch (e) {
+    console.warn("Invalid JSON from logs API:", e)
+    box.innerHTML = "<span class='muted'>Invalid logs response</span>"
+    return
+  }
+
+  // Support multiple response shapes safely
+  const logs = Array.isArray(data?.logs)
+    ? data.logs
+    : Array.isArray(data)
+    ? data
+    : []
+
+  if (!logs.length) {
+    box.innerHTML = "<span class='muted'>No logs found</span>"
+    return
+  }
+
+  box.innerHTML = logs
+    .map(l => {
+      const ts = l.timestamp
+        ? new Date(l.timestamp * 1000).toLocaleString()
+        : "—"
+      const level = l.level || "info"
+      const msg = l.message || ""
+      return `${ts} [${level}] ${msg}`
     })
+    .join("<br/>")
 }
 
-/* ---------------- CONTAINERS ---------------- */
 
-function loadContainers() {
-  fetch(`/api/containers?agent_id=${currentAgentId}`, {
-    headers: { Authorization: "Bearer " + API_TOKEN }
-  })
-    .then(r => r.json())
-    .then(containers => {
-      containersTbody.innerHTML = ""
-      containers.forEach(c => {
-        const tr = document.createElement("tr")
-        tr.innerHTML = `
-          <td class="link">${c.name}</td>
+
+/* ---------------- CONTAINERS (ONCE ONLY) ---------------- */
+
+async function loadContainersOnce() {
+  if (!currentAgentId) return
+  if (containersLoadedFor === currentAgentId) return
+
+  containersLoadedFor = currentAgentId
+
+  let res
+  try {
+    res = await fetch(`/api/containers?agent_id=${currentAgentId}`, {
+      headers: { Authorization: "Bearer " + API_TOKEN }
+    })
+  } catch {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Containers API unreachable</td></tr>`
+    return
+  }
+
+  if (!res.ok) {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Containers not supported</td></tr>`
+    return
+  }
+
+  let containers = []
+  try {
+    containers = await res.json()
+  } catch {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Invalid containers response</td></tr>`
+    return
+  }
+
+  containersTbody.innerHTML = containers.length
+    ? containers.map(c => `
+        <tr>
+          <td>${c.name}</td>
           <td>${c.image}</td>
           <td>${c.status}</td>
           <td>${c.cpu_percent?.toFixed(1) ?? "—"}%</td>
           <td>${c.mem_used_mb ?? "—"} MB</td>
-        `
-        tr.querySelector(".link").onclick = () => openContainer(c)
-        containersTbody.appendChild(tr)
-      })
-    })
+        </tr>
+      `).join("")
+    : `<tr><td colspan="5" class="muted">No containers detected</td></tr>`
 }
 
-function openContainer(c) {
-  currentContainerId = c.container_id
-  document.getElementById("containerLogsPanel").style.display = "block"
-  document.getElementById("containerTitle").textContent = c.name
-
-  fetch(`/api/container/logs/fetch?container_id=${currentContainerId}`, {
-    headers: { Authorization: "Bearer " + API_TOKEN }
-  })
-    .then(r => r.json())
-    .then(d => {
-      const box = document.getElementById("containerLogs")
-      box.innerHTML = ""
-      d.logs?.forEach(l => {
-        box.innerHTML += `${new Date(l.timestamp * 1000).toISOString()} ${l.message}<br/>`
-      })
-    })
-}
-
-/* ---------------- LOGOUT ---------------- */
-
-document.getElementById("logoutBtn").onclick = () => {
-  sessionStorage.clear()
-  window.location.href = "/index.html"
-}

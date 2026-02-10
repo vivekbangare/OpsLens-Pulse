@@ -11,6 +11,7 @@ type HostMetrics struct {
 	Hostname     string            `json:"hostname"`   // host name
 	OS           string            `json:"os"`         // add this
 	IP           string            `json:"ip"`
+	Version      string            `json:"version"`
 	Cores        int               `json:"cores"`
 	CPUPercent   float32           `json:"cpu_percent"`    // CPU usage %
 	MemUsedMB    float32           `json:"mem_used_mb"`    // Memory used in MB

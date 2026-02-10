@@ -10,16 +10,16 @@ func ToSharedMetrics(
 ) shared.ContainerMetrics {
 
 	return shared.ContainerMetrics{
-		AccountID:   accountID,
-		AgentID:     agentID,
-		Hostname:    hostname,
-		ContainerID: raw.ID,
+		AccountID:     accountID,
+		AgentID:       agentID,
+		Hostname:      hostname,
+		ContainerID:   raw.ID,
 		ContainerName: raw.Name,
-		Image:       raw.Image,
-		Status:      raw.Status,
-		CPUPercent:  float32(raw.CPU),
-		MemTotalMB:  float32(raw.MemLimitMB),
-		MemUsedMB:   float32(raw.MemUsedMB),
-		Timestamp:   raw.Timestamp.Unix(),
+		Image:         raw.Image,
+		Status:        raw.Status,
+		CPUPercent:    float32(raw.CPU),
+		MemTotalMB:    float32(raw.MemLimitMB),
+		MemUsedMB:     float32(raw.MemUsedMB),
+		Timestamp:     raw.Timestamp.Unix(),
 	}
 }

@@ -23,3 +23,20 @@ func HostsHandler(st store.Store) http.HandlerFunc {
 		json.NewEncoder(w).Encode(agents)
 	}
 }
+
+func HostSummaryHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accountID := r.URL.Query().Get("account_id")
+		if accountID == "" {
+			accountID = "default"
+		}
+
+		data, err := st.GetLatestHostMetrics(accountID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}
+}

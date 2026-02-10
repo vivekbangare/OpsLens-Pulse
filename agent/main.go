@@ -151,7 +151,7 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start host log collector
-	go collector.StartLogCollector(ctx, agentID, logPath, serverURL, apiKey, logInterval, accountID)
+	go collector.StartLogCollector(ctx, agentID, hostname, logPath, serverURL, apiKey, logInterval, accountID)
 
 	// Docker detection
 	dockerAvailable := false
@@ -189,6 +189,7 @@ func main() {
 				AgentID:    agentID,
 				Hostname:   hostname,
 				OS:         osName,
+				Version:    AgentVersion,
 				Timestamp:  time.Now().Unix(),
 				Cores:      runtime.NumCPU(),
 				MemTotalMB: float32(memTotal),

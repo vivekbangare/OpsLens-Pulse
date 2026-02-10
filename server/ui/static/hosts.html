@@ -1,27 +1,27 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>OpsLens Pulse</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <h1>🖥️ OpsLens Pulse</h1>
-  <small id="apiKeyInfo" style="float:right; color:#94a3b8;"></small>
 
-  <div class="controls">
-    <input type="text" id="searchInput" placeholder="Search hosts..." />
-    <input type="text" id="tagFilterInput" placeholder="Filter by tag (env=prod)" />
-    <button id="logoutBtn">Logout</button>
-  </div>
+  <header class="topbar">
+    <h1>🖥️ OpsLens Pulse</h1>
+    <small id="apiKeyInfo"></small>
+  </header>
 
   <!-- HOST LIST -->
-  <table id="hosts">
+  <table id="hostsTable">
     <thead>
       <tr>
-        <th>Hostname</th>
+        <th>Host</th>
         <th>Status</th>
         <th>Last Seen</th>
+        <th>IP</th>
+        <th>OS</th>
+        <th>Tags</th>
       </tr>
     </thead>
     <tbody></tbody>
@@ -29,46 +29,46 @@
 
   <!-- HOST DETAILS -->
   <div id="hostDetails" style="display:none">
-    <button id="backBtn">Back</button>
+    <button id="backBtn" class="back-btn">⬅ Back</button>
+
     <h2 id="detailsHostname"></h2>
 
-    <div class="panel">
-      <p><strong>IP:</strong> <span id="detailsIP"></span></p>
-      <p><strong>OS:</strong> <span id="detailsOS"></span></p>
-      <p><strong>CPU:</strong> <span id="detailsCPU"></span>%</p>
-      <p><strong>Memory:</strong> <span id="detailsMem"></span> MB</p>
-      <p><strong>Uptime:</strong> <span id="detailsUptime"></span></p>
-      <p><strong>Tags:</strong> <span id="detailsTags"></span></p>
+    <div class="panel grid-3">
+      <div>
+        <label>Status</label>
+        <div id="detailsStatus"></div>
+      </div>
+      <div>
+        <label>CPU</label>
+        <div class="bar">
+          <div id="cpuBar" class="bar-fill"></div>
+        </div>
+        <span id="detailsCPU"></span>%
+      </div>
+      <div>
+        <label>Memory</label>
+        <div class="bar">
+          <div id="memBar" class="bar-fill mem"></div>
+        </div>
+        <span id="detailsMem"></span> MB
+      </div>
     </div>
 
-    <!-- HOST LOGS -->
+    <div class="panel">
+      <label>Uptime</label>
+      <div id="detailsUptime"></div>
+      <label>Tags</label>
+      <div id="detailsTags"></div>
+    </div>
+
     <div class="panel">
       <h3>📜 Host Logs</h3>
-
-      <div class="log-controls">
-        <select id="logTimeRange">
-          <option value="5m">Last 5 min</option>
-          <option value="15m">Last 15 min</option>
-          <option value="1h">Last 1 hour</option>
-          <option value="24h">Last 24 hours</option>
-        </select>
-
-        <select id="logLevel">
-          <option value="">ALL</option>
-          <option value="info">INFO</option>
-          <option value="warn">WARN</option>
-          <option value="error">ERROR</option>
-        </select>
-      </div>
-
       <div id="hostLogs" class="log-box"></div>
     </div>
 
-    <!-- CONTAINERS -->
     <div class="panel">
       <h3>🐳 Containers</h3>
-
-      <table id="containers">
+      <table id="containersTable">
         <thead>
           <tr>
             <th>Name</th>
@@ -80,12 +80,6 @@
         </thead>
         <tbody></tbody>
       </table>
-    </div>
-
-    <!-- CONTAINER LOGS -->
-    <div class="panel" id="containerLogsPanel" style="display:none">
-      <h3>📦 Container Logs: <span id="containerTitle"></span></h3>
-      <div id="containerLogs" class="log-box"></div>
     </div>
   </div>
 

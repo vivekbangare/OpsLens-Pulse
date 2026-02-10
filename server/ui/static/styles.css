@@ -1,84 +1,19 @@
 body {
-  font-family: Arial, sans-serif;
-  background: #0f172a;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0b1220;
   color: #e5e7eb;
   padding: 20px;
 }
 
-h1 {
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   margin-bottom: 16px;
 }
 
-/* Centering only on login page wrapper */
-.login-page-wrapper {
-  height: 100vh; /* full viewport height */
-  display: flex;
-  justify-content: center;
-  align-items: center;
-}
-
-.login-container {
-  background: #1e293b;      /* container background */
-  padding: 40px 30px;       /* comfortable padding */
-  border-radius: 12px;
-  width: 320px;             /* fixed width */
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-}
-
-.login-container h1 {
-  color: #e0e7ff;
-  margin-bottom: 30px;
-  font-weight: 700;
-  font-size: 28px;
-  text-align: center;
-}
-
-.login-container input {
-  width: 100%;
-  padding: 12px 15px;
-  margin-bottom: 20px;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  box-sizing: border-box;
-}
-
-.login-container input::placeholder {
-  color: #94a3b8;
-}
-
-.login-container button {
-  width: 100%;
-  padding: 12px 15px;
-  background: #2563eb;
-  border: none;
-  border-radius: 8px;
-  color: white;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
-}
-
-.login-container button:hover {
-  background: #1d4ed8;
-}
-
-
-.error {
-  color: #f87171;
-  margin-top: 8px;
-}
-
-.controls {
-  margin-bottom: 10px;
-}
-
-.controls input, .controls select, .controls button {
-  padding: 6px 10px;
-  margin-right: 8px;
-  border-radius: 4px;
-  border: none;
+h1 {
+  font-size: 22px;
 }
 
 table {
@@ -86,88 +21,105 @@ table {
   border-collapse: collapse;
 }
 
+th {
+  color: #94a3b8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 th, td {
   padding: 10px;
-  border-bottom: 1px solid #334155;
-  text-align: left;
+  border-bottom: 1px solid #1e293b;
 }
 
-.alive {
-  color: #22c55e;
+tbody tr:hover {
+  background: #020617;
 }
 
-.dead {
-  color: #ef4444;
-}
+.alive { color: #22c55e; }
+.dead { color: #ef4444; }
 
 .dot {
-  height: 10px;
-  width: 10px;
+  height: 8px;
+  width: 8px;
   border-radius: 50%;
   display: inline-block;
   margin-right: 6px;
 }
 
-.dot.alive {
-  background-color: #22c55e;
-  animation: pulse 1.5s infinite;
-}
-
-.dot.dead {
-  background-color: #ef4444;
-}
-
-@keyframes pulse {
-  0%   { transform: scale(0.8); opacity: 0.7; }
-  50%  { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(0.8); opacity: 0.7; }
-}
-
-.tag {
-  display: inline-block;
-  background: #eef2ff;
-  color: #3730a3;
-  padding: 2px 6px;
-  margin: 2px;
-  border-radius: 4px;
-  font-size: 12px;
-}
-
-.tag-key {
-  font-weight: bold;
-}
-
-#hostDetails {
-  margin-top: 20px;
-  padding: 10px;
-  background: #1e293b;
-  border-radius: 6px;
-}
-
-#hostDetails button#backBtn::before {
-  content: "⬅ "; /* Unicode left arrow */
-}
-.panel {
-  margin-top: 16px;
-  padding: 12px;
-  background: #1e293b;
-  border-radius: 6px;
-}
-
-.log-box {
-  background: #020617;
-  padding: 8px;
-  height: 200px;
-  overflow-y: auto;
-  font-family: monospace;
-  font-size: 13px;
-  border-radius: 4px;
-}
+.dot.alive { background: #22c55e; }
+.dot.dead { background: #ef4444; }
 
 .link {
   cursor: pointer;
   color: #93c5fd;
 }
-.link:hover {
-  text-decoration: underline;
+
+.link:hover { text-decoration: underline; }
+
+.panel {
+  margin-top: 16px;
+  padding: 14px;
+  background: #020617;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+label {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.bar {
+  height: 6px;
+  background: #1e293b;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 6px 0;
+}
+
+.bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  transition: width 0.3s ease;
+}
+
+.bar-fill.mem {
+  background: #22c55e;
+}
+
+.tag {
+  border: 1px solid #334155;
+  color: #cbd5e1;
+  padding: 2px 6px;
+  margin-right: 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.log-box {
+  background: #000814;
+  font-family: monospace;
+  font-size: 13px;
+  padding: 10px;
+  height: 200px;
+  overflow-y: auto;
+}
+
+.muted {
+  color: #64748b;
+}
+
+.back-btn {
+  background: none;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  margin-bottom: 8px;
 }

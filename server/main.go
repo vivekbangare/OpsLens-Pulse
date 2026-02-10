@@ -119,8 +119,8 @@ func makeAuthHandler(st store.Store, handler func(store.Store) http.HandlerFunc)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-
-		handler(st)(w, r)
+		ctx := context.WithValue(r.Context(), "account_id", "default")
+		handler(st)(w, r.WithContext(ctx))
 	}
 }
 
@@ -169,9 +169,11 @@ func main() {
 	chcfg := config.LoadClickHouse()
 	chStore, err := store.NewClickHouseStore(chcfg.DSN())
 	if err != nil {
-		log.Println("ClickHouse unavailable, falling back to MemoryStore:", err)
-		st = store.NewMemoryStore()
+		//log.Println("ClickHouse unavailable, falling back to MemoryStore:", err)
+		// st = store.NewMemoryStore()
+		log.Fatalf("❌ ClickHouse connection FAILED: %v", err)
 	} else {
+		log.Println("✅ Connected to ClickHouse")
 		st = chStore
 	}
 
@@ -203,6 +205,7 @@ func main() {
 	http.HandleFunc("/api/metrics", makeAuthHandler(st, api.MetricsHandler))
 	http.HandleFunc("/api/heartbeat", makeAuthHandler(st, api.HeartbeatHandler))
 	http.HandleFunc("/api/hosts", makeAuthHandler(st, api.HostsHandler))
+	http.HandleFunc("/api/hosts/summary", makeAuthHandler(st, api.HostSummaryHandler))
 	http.HandleFunc("/api/logs", makeAuthHandler(st, api.LogsHandler))
 	http.HandleFunc("/api/logs/fetch", makeAuthHandler(st, api.FetchLogsHandler))
 	http.HandleFunc("/api/container/metrics", makeAuthHandler(st, api.ContainerMetricsHandler))
@@ -215,10 +218,10 @@ func main() {
 	log.Println("Server listening on", addr)
 
 	srv := &http.Server{
-		Addr: addr,
-		ReadTimeout: 10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout: 60 * time.Second,
+		Addr:           addr,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
 

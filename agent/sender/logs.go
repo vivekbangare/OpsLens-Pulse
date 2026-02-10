@@ -5,28 +5,43 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"log"
 	"time"
 )
 
 // LogEntry represents a log entry
 type LogEntry struct {
-	AgentID   string `json:"agent_id"`
-	Timestamp int64  `json:"timestamp"`
-	Message   string `json:"message"`
+	AccountID string            `json:"account_id"`
+	AgentID   string            `json:"agent_id"`
+	Hostname  string            `json:"hostname"`
+	Timestamp int64             `json:"timestamp"`
+	Level     string            `json:"level"`
+	Message   string            `json:"message"`
+	Tags      map[string]string `json:"tags"`
 }
 
 type LogBatch struct {
-	AgentID string     `json:"agent_id"`
-	Logs    []LogEntry `json:"logs"`
+	AccountID string     `json:"account_id"`
+	AgentID   string     `json:"agent_id"`
+	Hostname  string     `json:"hostname"`
+	Logs      []LogEntry `json:"logs"`
 }
 
 func SendLogs(serverURL, apiKey string, payload LogBatch) error {
+	log.Printf(
+		"🚨 SEND LOGS CALLED: account=%s agent=%s host=%s count=%d server=%s",
+		payload.AccountID,
+		payload.AgentID,
+		payload.Hostname,
+		len(payload.Logs),
+		serverURL,
+	)
 	body, error := json.Marshal(payload)
 
 	if error != nil {
 		return error
 	}
-
+	log.Printf("📦 LOG PAYLOAD: %s", string(body))
 	req, err := http.NewRequest("POST", serverURL+"/api/logs", bytes.NewBuffer(body))
 	if err != nil {
 		return err
@@ -36,14 +51,17 @@ func SendLogs(serverURL, apiKey string, payload LogBatch) error {
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	fmt.Println("📤 POST /api/logs →", serverURL)
+	fmt.Printf("📦 Payload size: %d logs\n", len(payload.Logs))
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-
+	fmt.Println("📥 Response status:", resp.StatusCode)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("server returned status: %d", resp.StatusCode)
 	}
+
 	return nil
 }

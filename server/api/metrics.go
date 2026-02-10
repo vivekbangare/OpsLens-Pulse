@@ -15,13 +15,13 @@ func MetricsHandler(store store.Store) http.HandlerFunc {
 			return
 		}
 
-		if metrics.AccountID == "" {
-			http.Error(w, "missing account_id", http.StatusBadRequest)
+		if err := store.UpsertAgentMetadata(metrics); err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
 
 		if err := store.SaveMetrics(metrics); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), 500)
 			return
 		}
 

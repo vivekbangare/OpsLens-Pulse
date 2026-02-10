@@ -12,7 +12,9 @@ type Store interface {
 	SaveContainerMetrics(m shared.ContainerMetrics) error
 	InsertContainerLogs(batch shared.ContainerLogBatch) error
 	UpsertAgentHeartbeat(hb shared.Heartbeat) error
-    ListAgents(accountID string) ([]shared.AgentInfo, error)
+	UpsertAgentMetadata(m shared.HostMetrics) error
+	ListAgents(accountID string) ([]shared.AgentInfo, error)
+	GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error)
 
 	// Query
 	GetLogs(
