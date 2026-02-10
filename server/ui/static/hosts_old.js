@@ -1,23 +1,36 @@
 const API_TOKEN = sessionStorage.getItem("apiKey")
+
 if (!API_TOKEN) location.href = "/index.html"
 
 document.getElementById("apiKeyInfo").textContent =
   "API Key: ****" + API_TOKEN.slice(-4)
 
-/* ---------------- GLOBAL STATE ---------------- */
-
 const hostsTbody = document.querySelector("#hostsTable tbody")
 const containersTbody = document.querySelector("#containersTable tbody")
 const logSourceSelect = document.getElementById("logSourceSelect")
+const refreshLogsBtn = document.getElementById("refreshLogsBtn")
+
+if (refreshLogsBtn) {
+  refreshLogsBtn.onclick = () => {
+    if (!currentAgentId) return
+    loadLogs(true) // force refresh
+  }
+}
+if (logSourceSelect) {
+  logSourceSelect.onchange = () => {
+    selectedLogSource = logSourceSelect.value
+    renderLogs(lastLogsCache)
+  }
+}
 
 let hosts = []
 let summaryCache = {}
 let currentAgentId = null
 let detailsTimer = null
 let containersLoadedFor = null
-
 let lastLogsCache = []
 let selectedLogSource = ""
+
 
 const REFRESH = 5000
 
@@ -29,7 +42,8 @@ function timeAgo(ts) {
   if (diff < 60) return `${diff}s ago`
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
-  return `${Math.floor(diff / 86400)}d ago`
+  if (diff < 31536000) return `${Math.floor(diff / 86400)}d ago`
+  return `${Math.floor(diff / 31536000)}y ago`
 }
 
 function renderTags(tags) {
@@ -50,39 +64,15 @@ function renderHosts() {
         <span class="dot ${h.alive ? "alive" : "dead"}"></span>
         ${h.hostname}
       </td>
-      <td class="${h.alive ? "alive" : "dead"}">
-        ${h.alive ? "Alive" : "Down"}
-      </td>
+      <td class="${h.alive ? "alive" : "dead"}">${h.alive ? "Alive" : "Down"}</td>
       <td>${timeAgo(h.last_seen)}</td>
       <td>${h.ip || "—"}</td>
       <td>${h.os || "—"}</td>
-      <td>${renderHostListTags(h.tags)}</td>
+      <td>${renderTags(h.tags)}</td>
     `
     tr.querySelector(".link").onclick = () => openHost(h.agent_id)
     hostsTbody.appendChild(tr)
   })
-}
-
-function renderHostListTags(tags) {
-  if (!tags || typeof tags !== "object") return "—"
-
-  const entries = Object.entries(tags)
-  const visible = entries.slice(0, 3)
-  const hidden = entries.slice(3)
-
-  const html = visible
-    .map(([k, v]) => `<span class="tag">${k}:${v}</span>`)
-    .join(" ")
-
-  const tooltip = entries
-    .map(([k, v]) => `${k}: ${v}`)
-    .join("\n")
-
-  return `
-    <div class="tag-preview" data-tooltip="${tooltip}">
-      ${html}${hidden.length ? `<span class="tag more">+${hidden.length}</span>` : ""}
-    </div>
-  `
 }
 
 async function loadHosts() {
@@ -98,15 +88,14 @@ async function loadHosts() {
 
   hosts = hosts.map(h => {
     const s = summaryCache[h.agent_id]
-    return s
-      ? {
-          ...h,
-          cpu_percent: s.cpu_percent,
-          mem_used_mb: s.mem_used_mb,
-          mem_total_mb: s.mem_total_mb,
-          uptime_sec: s.uptime_sec
-        }
-      : h
+    if (!s) return h
+    return {
+      ...h,
+      cpu_percent: s.cpu_percent,
+      mem_used_mb: s.mem_used_mb,
+      mem_total_mb: s.mem_total_mb,
+      uptime_sec: s.uptime_sec
+    }
   })
 
   renderHosts()
@@ -118,17 +107,15 @@ loadHosts()
 /* ---------------- HOST DETAILS ---------------- */
 
 function openHost(agentId) {
+  loadLogSources()
   currentAgentId = agentId
   containersLoadedFor = null
-  lastLogsCache = []
-  selectedLogSource = ""
 
   document.getElementById("hostsTable").style.display = "none"
   document.getElementById("hostDetails").style.display = "block"
 
   refreshHostDetails()
   loadContainersOnce()
-  loadLogs()
 
   detailsTimer = setInterval(refreshHostDetails, REFRESH)
 }
@@ -156,120 +143,109 @@ function refreshHostDetails() {
       ? `${Math.floor(host.uptime_sec / 60)} min`
       : "—"
 
-  const tagsEl = document.getElementById("detailsTags")
-  tagsEl.innerHTML = renderTags(host.tags)
+  document.getElementById("detailsTags").innerHTML =
+    renderTags(host.tags)
 
-  tagsEl.setAttribute(
-  "data-tooltip",
-  host.tags
-    ? Object.entries(host.tags).map(([k, v]) => `${k}: ${v}`).join("\n")
-    : ""
- )
+  loadLogs()
 }
 
 document.getElementById("backBtn").onclick = () => {
-  clearInterval(detailsTimer)
-  detailsTimer = null
+  if (detailsTimer) {
+    clearInterval(detailsTimer)
+    detailsTimer = null
+  }
+
   currentAgentId = null
-  lastLogsCache = []
-  selectedLogSource = ""
+  containersLoadedFor = null
 
   document.getElementById("hostDetails").style.display = "none"
   document.getElementById("hostsTable").style.display = "table"
 }
 
-/* ---------------- LOG SOURCES DROPDOWN ---------------- */
-
-if (logSourceSelect) {
-  logSourceSelect.onchange = () => {
-    selectedLogSource = logSourceSelect.value
-    renderLogs()
-  }
-}
-
-function buildSourceDropdown(logs) {
-  if (!logSourceSelect) return
-
-  const sources = new Set()
-  logs.forEach(l => l.tags?.source && sources.add(l.tags.source))
-
-  const prev = selectedLogSource
-  logSourceSelect.innerHTML = `<option value="">All</option>`
-
-  sources.forEach(src => {
-    const opt = document.createElement("option")
-    opt.value = src
-    opt.textContent = src
-    logSourceSelect.appendChild(opt)
-  })
-
-  logSourceSelect.value = prev
-}
-
 /* ---------------- LOGS ---------------- */
 
-async function loadLogs() {
+async function loadLogs(force = false) {
+  if (!force && lastLogsCache.length) {
+    renderLogs(lastLogsCache)
+    return
+  }
   if (!currentAgentId) return
 
   const box = document.getElementById("hostLogs")
 
   let res
   try {
+    const source = logSourceSelect?.value || ""
+
     const params = new URLSearchParams({
       agent_id: currentAgentId,
       account_id: "default"
     })
 
+    if (source) {
+      params.append("source", source)
+    }
+
     res = await fetch(`/api/logs/fetch?${params.toString()}`, {
       headers: { Authorization: "Bearer " + API_TOKEN }
     })
-  } catch {
-    box.innerHTML = "<span class='muted'>Logs service unreachable</span>"
+    lastLogsCache = logs
+    buildSourceDropdown(logs)
+    renderLogs(logs)
+  } catch (e) {
+    console.warn("Logs fetch failed:", e)
+    box.innerHTML = "<span class='muted'>Unable to reach logs service</span>"
     return
   }
 
+  // Handle HTTP errors
   if (!res.ok) {
-    box.innerHTML = "<span class='muted'>Logs unavailable</span>"
+    box.innerHTML =
+      `<span class='muted'>Logs unavailable (${res.status})</span>`
     return
   }
 
-  let logs
+  let data
   try {
-    logs = await res.json()
-  } catch {
+    data = await res.json()
+  } catch (e) {
+    console.warn("Invalid JSON from logs API:", e)
     box.innerHTML = "<span class='muted'>Invalid logs response</span>"
     return
   }
 
-  lastLogsCache = Array.isArray(logs) ? logs : []
-  buildSourceDropdown(lastLogsCache)
-  renderLogs()
-}
+  // Support multiple response shapes safely
+  const logs = Array.isArray(data?.logs)
+    ? data.logs
+    : Array.isArray(data)
+    ? data
+    : []
 
-function renderLogs() {
-  const box = document.getElementById("hostLogs")
-
-  const filtered = selectedLogSource
-    ? lastLogsCache.filter(l => l.tags?.source === selectedLogSource)
-    : lastLogsCache
-
-  if (!filtered.length) {
+  if (!logs.length) {
     box.innerHTML = "<span class='muted'>No logs found</span>"
     return
   }
 
-  box.innerHTML = filtered.map(l => {
-    const ts = l.timestamp
-      ? new Date(l.timestamp * 1000).toLocaleString()
-      : "—"
-    return `${ts} [${l.level || "info"}] ${l.message || ""}`
-  }).join("<br/>")
+  box.innerHTML = logs
+    .map(l => {
+      const ts = l.timestamp
+        ? new Date(l.timestamp * 1000).toLocaleString()
+        : "—"
+      const level = l.level || "info"
+      const msg = l.message || ""
+      return `${ts} [${level}] ${msg}`
+    })
+    .join("<br/>")
 }
+
+
 
 /* ---------------- CONTAINERS (ONCE ONLY) ---------------- */
 
 async function loadContainersOnce() {
-  if (!currentAgentId || containersLoadedFor === currentAgentId) return
+  if (!currentAgentId) return
+  if (containersLoadedFor === currentAgentId) return
+
   containersLoadedFor = currentAgentId
 
   let res
@@ -289,7 +265,15 @@ async function loadContainersOnce() {
     return
   }
 
-  const containers = await res.json()
+  let containers = []
+  try {
+    containers = await res.json()
+  } catch {
+    containersTbody.innerHTML =
+      `<tr><td colspan="5" class="muted">Invalid containers response</td></tr>`
+    return
+  }
+
   containersTbody.innerHTML = containers.length
     ? containers.map(c => `
         <tr>
@@ -301,4 +285,99 @@ async function loadContainersOnce() {
         </tr>
       `).join("")
     : `<tr><td colspan="5" class="muted">No containers detected</td></tr>`
+}
+
+async function loadLogSources() {
+  const res = await fetch(
+    `/api/logs/sources?agent_id=${currentAgentId}`,
+    { headers: authHeaders() }
+  )
+  const sources = await res.json()
+
+  const select = document.getElementById("logSourceSelect")
+  select.innerHTML = `<option value="">All</option>`
+
+  sources.forEach(s => {
+    select.innerHTML += `<option value="${s}">${s}</option>`
+  })
+}
+
+function extractSources(logs) {
+  const set = new Set()
+  logs.forEach(l => {
+    if (l.tags && l.tags.source) {
+      set.add(l.tags.source)
+    }
+  })
+  return Array.from(set)
+}
+
+function renderSourceFilter(logs) {
+  const select = document.getElementById("logSourceSelect")
+  if (!select) return
+
+  const sources = extractSources(logs)
+
+  select.innerHTML = `<option value="">All</option>`
+
+  sources.forEach(src => {
+    const opt = document.createElement("option")
+    opt.value = src
+    opt.textContent = src
+    select.appendChild(opt)
+  })
+}
+
+function applyLogFilters(logs) {
+  const source = document.getElementById("logSourceSelect")?.value
+
+  return logs.filter(l => {
+    if (source && l.tags?.source !== source) return false
+    return true
+  })
+}
+
+function buildSourceDropdown(logs) {
+  if (!logSourceSelect) return
+
+  // preserve selection
+  const prev = selectedLogSource
+
+  const sources = new Set()
+  logs.forEach(l => {
+    if (l.tags?.source) sources.add(l.tags.source)
+  })
+
+  // build only once OR when empty
+  if (logSourceSelect.options.length <= 1) {
+    logSourceSelect.innerHTML = `<option value="">All</option>`
+    sources.forEach(src => {
+      const opt = document.createElement("option")
+      opt.value = src
+      opt.textContent = src
+      logSourceSelect.appendChild(opt)
+    })
+  }
+
+  logSourceSelect.value = prev
+}
+
+function renderLogs(logs) {
+  const box = document.getElementById("hostLogs")
+
+  const filtered = selectedLogSource
+    ? logs.filter(l => l.tags?.source === selectedLogSource)
+    : logs
+
+  if (!filtered.length) {
+    box.innerHTML = "<span class='muted'>No logs found</span>"
+    return
+  }
+
+  box.innerHTML = filtered.map(l => {
+    const ts = l.timestamp
+      ? new Date(l.timestamp * 1000).toLocaleString()
+      : "—"
+    return `${ts} [${l.level || "info"}] ${l.message || ""}`
+  }).join("<br/>")
 }

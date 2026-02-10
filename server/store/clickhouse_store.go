@@ -9,8 +9,9 @@ import (
 	"log"
 	"time"
 
-	_ "github.com/ClickHouse/clickhouse-go/v2"
 	"opslense-pulse/shared"
+
+	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
 
 // -------------------------------
@@ -152,6 +153,7 @@ func (c *ClickHouseStore) GetLogs(
 	agentID string,
 	from, to time.Time,
 	level string,
+	source string,
 	limit int,
 ) ([]shared.LogEntry, error) {
 
@@ -172,26 +174,26 @@ func (c *ClickHouseStore) GetLogs(
 	`
 	args := []any{accountID}
 
+	if source != "" {
+		query += " AND JSONExtractString(tags, 'source') = ?"
+		args = append(args, source)
+	}
 	if agentID != "" {
 		query += " AND agent_id = ?"
 		args = append(args, agentID)
 	}
-
 	if hostname != "" {
 		query += " AND hostname = ?"
 		args = append(args, hostname)
 	}
-
 	if !from.IsZero() {
 		query += " AND timestamp >= ?"
 		args = append(args, from)
 	}
-
 	if !to.IsZero() {
 		query += " AND timestamp <= ?"
 		args = append(args, to)
 	}
-
 	if level != "" {
 		query += " AND level = ?"
 		args = append(args, level)
@@ -202,7 +204,7 @@ func (c *ClickHouseStore) GetLogs(
 
 	rows, err := c.db.Query(query, args...)
 	if err != nil {
-		return []shared.LogEntry{}, err
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -224,14 +226,19 @@ func (c *ClickHouseStore) GetLogs(
 			continue
 		}
 
+		le.AccountID = accountID
 		le.Timestamp = ts.Unix()
 		le.HumanTime = ts.Format("2006-01-02 15:04:05")
 
-		if tagsJSON != "" {
+		if tagsJSON != "" && json.Valid([]byte(tagsJSON)) {
 			_ = json.Unmarshal([]byte(tagsJSON), &le.Tags)
 		}
 
 		logs = append(logs, le)
+	}
+
+	if err := rows.Err(); err != nil {
+		return logs, err
 	}
 
 	return logs, nil
@@ -546,6 +553,32 @@ func (c *ClickHouseStore) GetLatestHostMetrics(accountID string) (map[string]sha
 	}
 
 	return out, nil
+}
+
+func (c *ClickHouseStore) GetLogSources(
+	accountID, agentID string,
+) ([]string, error) {
+
+	rows, err := c.db.Query(`
+		SELECT DISTINCT JSONExtractString(tags, 'source')
+		FROM logs
+		WHERE account_id = ?
+		  AND agent_id = ?
+		  AND JSONHas(tags, 'source')
+	`, accountID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sources []string
+	for rows.Next() {
+		var src string
+		if err := rows.Scan(&src); err == nil && src != "" {
+			sources = append(sources, src)
+		}
+	}
+	return sources, nil
 }
 
 // -------------------------------

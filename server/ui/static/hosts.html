@@ -63,6 +63,17 @@
 
     <div class="panel">
       <h3>📜 Host Logs</h3>
+      <div class="log-toolbar">
+        <label for="logSourceSelect">Source:</label>
+        <select id="logSourceSelect">
+          <option value="">All</option>
+          <option value="host-log">Host</option>
+          <option value="system-log">System</option>
+          <option value="kernel-log">Kernel</option>
+          <option value="app">Application</option>
+        </select>
+        <button id="refreshLogBtn" class="refresh-btn">🔄 Refresh</button>
+      </div>
       <div id="hostLogs" class="log-box"></div>
     </div>
 

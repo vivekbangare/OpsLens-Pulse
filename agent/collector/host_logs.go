@@ -3,39 +3,37 @@ package collector
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"opslense-pulse/agent/config"
 	"opslense-pulse/agent/logs"
 	"opslense-pulse/agent/sender"
 )
 
-// StartLogCollector collects host logs and sends them to the server
-func StartLogCollector(
+func startFileCollector(
 	ctx context.Context,
-	agentID, hostname, logPath, serverURL, apiKey string,
-	intervalSeconds int,
-	accountID string,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
 ) {
-	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
-	fmt.Println("📄 Host log collector started")
-	fmt.Println("   file:", logPath)
-	fmt.Println("   agent:", agentID)
-	fmt.Println("   host:", hostname)
-	fmt.Println("   account:", accountID)
+	fmt.Println("📄 File log collector started:", src.Path)
 
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("🛑 Host log collector stopping...")
 			return
 
 		case <-ticker.C:
-			content, err := logs.ReadLastLines(logPath, 50)
+			content, err := logs.ReadLastLines(src.Path, 50)
 			if err != nil {
-				fmt.Println("❌ Error reading logs:", err)
+				fmt.Println("❌ Read error:", err)
 				continue
 			}
 
@@ -45,7 +43,6 @@ func StartLogCollector(
 			}
 
 			var entries []sender.LogEntry
-
 			for _, line := range lines {
 				ts, msg, _ := parseLogLine(line)
 				if msg == "" {
@@ -60,7 +57,8 @@ func StartLogCollector(
 					Level:     "info",
 					Message:   msg,
 					Tags: map[string]string{
-						"source": "host-log",
+						"source": src.Name,
+						"type":   "file",
 					},
 				})
 			}
@@ -69,13 +67,88 @@ func StartLogCollector(
 				continue
 			}
 
-			fmt.Printf(
-				"🚚 Sending host logs: account=%s agent=%s host=%s count=%d\n",
-				accountID,
-				agentID,
-				hostname,
-				len(entries),
-			)
+			batch := sender.LogBatch{
+				AccountID: accountID,
+				AgentID:   agentID,
+				Hostname:  hostname,
+				Logs:      entries,
+			}
+
+			_ = retrySend(3, 2*time.Second, func() error {
+				return sender.SendLogs(serverURL, apiKey, batch)
+			})
+		}
+	}
+}
+
+func startDirectoryCollector(
+	ctx context.Context,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
+) {
+	files, _ := filepath.Glob(filepath.Join(src.Path, "*"))
+
+	for _, f := range files {
+		fileSrc := src
+		fileSrc.Path = f
+		fileSrc.Name = src.Name + ":" + filepath.Base(f)
+
+		go startFileCollector(
+			ctx,
+			accountID,
+			agentID,
+			hostname,
+			fileSrc,
+			serverURL,
+			apiKey,
+			interval,
+		)
+	}
+}
+
+func startCommandCollector(
+	ctx context.Context,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
+) {
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+			out, err := exec.Command("sh", "-c", src.Command).Output()
+			if err != nil {
+				continue
+			}
+
+			lines := splitLines(string(out))
+			if len(lines) == 0 {
+				continue
+			}
+
+			var entries []sender.LogEntry
+			for _, l := range lines {
+				entries = append(entries, sender.LogEntry{
+					AccountID: accountID,
+					AgentID:   agentID,
+					Hostname:  hostname,
+					Timestamp: time.Now().Unix(),
+					Level:     "info",
+					Message:   l,
+					Tags: map[string]string{
+						"source": src.Name,
+						"type":   "command",
+					},
+				})
+			}
 
 			batch := sender.LogBatch{
 				AccountID: accountID,
@@ -84,11 +157,7 @@ func StartLogCollector(
 				Logs:      entries,
 			}
 
-			if err := retrySend(3, 2*time.Second, func() error {
-				return sender.SendLogs(serverURL, apiKey, batch)
-			}); err != nil {
-				fmt.Println("❌ Failed to send logs:", err)
-			}
+			_ = sender.SendLogs(serverURL, apiKey, batch)
 		}
 	}
 }

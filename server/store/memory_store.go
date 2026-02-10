@@ -133,6 +133,7 @@ func (m *MemoryStore) GetLogs(
 	agentID string,
 	from, to time.Time,
 	level string,
+	source string,
 	limit int,
 ) ([]shared.LogEntry, error) {
 
@@ -156,6 +157,11 @@ func (m *MemoryStore) GetLogs(
 			if level != "" && l.Level != level {
 				continue
 			}
+			if source != "" {
+				if src, ok := l.Tags["source"]; !ok || src != source {
+					continue
+				}
+			}
 
 			t := time.Unix(l.Timestamp, 0)
 			if !from.IsZero() && t.Before(from) {
@@ -166,12 +172,37 @@ func (m *MemoryStore) GetLogs(
 			}
 
 			out = append(out, l)
+
 			if limit > 0 && len(out) >= limit {
 				return out, nil
 			}
 		}
 	}
 
+	return out, nil
+}
+
+func (m *MemoryStore) GetLogSources(accountID, agentID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+
+	for _, h := range m.hosts {
+		for _, l := range h.Logs {
+			if l.AccountID != accountID || l.AgentID != agentID {
+				continue
+			}
+			if src, ok := l.Tags["source"]; ok {
+				seen[src] = struct{}{}
+			}
+		}
+	}
+
+	var out []string
+	for s := range seen {
+		out = append(out, s)
+	}
 	return out, nil
 }
 

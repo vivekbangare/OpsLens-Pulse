@@ -76,6 +76,31 @@ func getLocalIP() string {
 	return ""
 }
 
+func defaultLogSources() []config.LogSource {
+	if runtime.GOOS == "windows" {
+		return []config.LogSource{
+			{
+				Name: "agent-self",
+				Type: "file",
+				Path: `C:\ProgramData\OpsLens-Pulse\agent.log`,
+			},
+		}
+	}
+
+	return []config.LogSource{
+		{
+			Name: "agent-self",
+			Type: "file",
+			Path: "/var/log/opslens-pulse/agent.log",
+		},
+		{
+			Name: "system-syslog",
+			Type: "file",
+			Path: "/var/log/syslog",
+		},
+	}
+}
+
 func main() {
 	shared.InitLogger("agent")
 	log.Println("🚀 OpsLens-Pulse Agent starting...")
@@ -127,14 +152,10 @@ func main() {
 		log.Fatal("🌐 server.url and 🔐 server.api_key must be set in agent config")
 	}
 
-	// Default log path
-	logPath := cfg.Agent.LogFilePath
-	if logPath == "" {
-		if runtime.GOOS == "windows" {
-			logPath = `C:\ProgramData\OpsLens-Pulse\agent.log`
-		} else {
-			logPath = "/var/log/opslens-pulse/agent.log"
-		}
+	logSources := cfg.Agent.Logs
+	if len(logSources) == 0 {
+		log.Println("⚠️ No log sources configured, using defaults")
+		logSources = defaultLogSources()
 	}
 
 	logInterval := cfg.Agent.LogCollectionIntervalSeconds
@@ -151,7 +172,18 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
 	// Start host log collector
-	go collector.StartLogCollector(ctx, agentID, hostname, logPath, serverURL, apiKey, logInterval, accountID)
+	for _, src := range logSources {
+		go collector.StartLogSource(
+			ctx,
+			cfg.AccountID,
+			agentID,
+			hostname,
+			src,
+			serverURL,
+			apiKey,
+			cfg.Agent.LogCollectionIntervalSeconds,
+		)
+	}
 
 	// Docker detection
 	dockerAvailable := false

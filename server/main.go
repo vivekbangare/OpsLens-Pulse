@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"github.com/google/uuid"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/google/uuid"
 
 	"opslense-pulse/server/api"
 	"opslense-pulse/server/config"
@@ -210,6 +211,7 @@ func main() {
 	http.HandleFunc("/api/logs/fetch", makeAuthHandler(st, api.FetchLogsHandler))
 	http.HandleFunc("/api/container/metrics", makeAuthHandler(st, api.ContainerMetricsHandler))
 	http.HandleFunc("/api/container/logs", makeAuthHandler(st, api.ContainerLogsHandler))
+	http.HandleFunc("/api/logs/sources", makeAuthHandler(st, api.LogSourcesHandler))
 
 	// -------------------------------
 	// Start server

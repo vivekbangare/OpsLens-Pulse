@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,11 +15,20 @@ type ServerConfig struct {
 	APIKey string `yaml:"api_key"`
 }
 
+type LogSource struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"` // file | directory | command
+	Path    string   `yaml:"path,omitempty"`
+	Command string   `yaml:"command,omitempty"`
+	Include []string `yaml:"include,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty"`
+}
+
 type AgentConfig struct {
-	IntervalSeconds              int    `yaml:"interval_seconds"`
-	SelfUpgrade                  bool   `yaml:"self_upgrade"`
-	LogFilePath                  string `yaml:"log_file_path"`
-	LogCollectionIntervalSeconds int    `yaml:"log_collection_interval_seconds"`
+	IntervalSeconds              int         `yaml:"interval_seconds"`
+	SelfUpgrade                  bool        `yaml:"self_upgrade"`
+	Logs                         []LogSource `yaml:"logs"`
+	LogCollectionIntervalSeconds int         `yaml:"log_collection_interval_seconds"`
 }
 
 type Config struct {
@@ -77,6 +87,56 @@ func LoadOrCreateConfig(path string) (Config, string, bool, error) {
 	return cfg, path, false, nil
 }
 
+func (c Config) Validate() error {
+	if c.Server.URL == "" {
+		return errors.New("server.url must be set")
+	}
+	if c.Server.APIKey == "" {
+		return errors.New("server.api_key must be set")
+	}
+	if c.Agent.IntervalSeconds <= 0 {
+		return errors.New("agent.interval_seconds must be > 0")
+	}
+
+	// Logs are OPTIONAL – defaults may be injected later
+	if len(c.Agent.Logs) > 0 {
+		if c.Agent.LogCollectionIntervalSeconds <= 0 {
+			return errors.New("agent.log_collection_interval_seconds must be > 0")
+		}
+
+		for i, src := range c.Agent.Logs {
+			if src.Name == "" {
+				return fmt.Errorf("agent.logs[%d].name is required", i)
+			}
+			if src.Type == "" {
+				return fmt.Errorf("agent.logs[%d].type is required", i)
+			}
+
+			switch src.Type {
+			case "file":
+				if src.Path == "" {
+					return fmt.Errorf("agent.logs[%d].path is required for type=file", i)
+				}
+			case "directory":
+				if src.Path == "" {
+					return fmt.Errorf("agent.logs[%d].path is required for type=directory", i)
+				}
+			case "command":
+				if src.Command == "" {
+					return fmt.Errorf("agent.logs[%d].command is required for type=command", i)
+				}
+			default:
+				return fmt.Errorf(
+					"agent.logs[%d].type must be one of: file, directory, command",
+					i,
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
@@ -86,7 +146,7 @@ func defaultConfig() Config {
 		Agent: AgentConfig{
 			IntervalSeconds:              5,
 			SelfUpgrade:                  false,
-			LogFilePath:                  "",
+			Logs:                         nil,
 			LogCollectionIntervalSeconds: 10,
 		},
 		Tags: map[string]string{
@@ -110,25 +170,4 @@ func save(path string, cfg Config) error {
 	enc := yaml.NewEncoder(f)
 	enc.SetIndent(2)
 	return enc.Encode(cfg)
-}
-
-func (c Config) Validate() error {
-	if c.Server.URL == "" {
-		return errors.New("server.url must be set")
-	}
-	if c.Server.APIKey == "" {
-		return errors.New("server.api_key must be set")
-	}
-	if c.Agent.IntervalSeconds <= 0 {
-		return errors.New("agent.interval_seconds must be > 0")
-	}
-
-	// Log collection validation (only if enabled by path)
-	if c.Agent.LogFilePath != "" {
-		if c.Agent.LogCollectionIntervalSeconds <= 0 {
-			return errors.New("agent.log_collection_interval_seconds must be > 0")
-		}
-	}
-
-	return nil
 }

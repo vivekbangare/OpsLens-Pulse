@@ -15,6 +15,7 @@ type Store interface {
 	UpsertAgentMetadata(m shared.HostMetrics) error
 	ListAgents(accountID string) ([]shared.AgentInfo, error)
 	GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error)
+	GetLogSources(accountID, agentID string) ([]string, error)
 
 	// Query
 	GetLogs(
@@ -23,6 +24,7 @@ type Store interface {
 		agentID string,
 		from, to time.Time,
 		level string,
+		source string,
 		limit int,
 	) ([]shared.LogEntry, error)
 

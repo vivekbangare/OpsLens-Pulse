@@ -63,6 +63,7 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 		agentID := r.URL.Query().Get("agent_id")
 		hostname := r.URL.Query().Get("hostname")
 		level := r.URL.Query().Get("level")
+		source := r.URL.Query().Get("source")
 
 		if accountID == "" {
 			http.Error(w, "missing account_id", http.StatusBadRequest)
@@ -98,6 +99,7 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 			start,
 			end,
 			level,
+			source,
 			limit,
 		)
 		if err != nil {
@@ -107,5 +109,19 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(logs)
+	}
+}
+
+func LogSourcesHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agentID := r.URL.Query().Get("agent_id")
+		accountID := r.Context().Value("account_id").(string)
+
+		out, err := s.GetLogSources(accountID, agentID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(out)
 	}
 }
