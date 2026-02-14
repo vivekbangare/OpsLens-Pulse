@@ -1,0 +1,4280 @@
+===== FILE: ./ui/dist/assets/index-DQ3P1g1z.css =====
+:root{font-family:system-ui,Avenir,Helvetica,Arial,sans-serif;line-height:1.5;font-weight:400;color-scheme:light dark;color:#ffffffde;background-color:#242424;font-synthesis:none;text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}a{font-weight:500;color:#646cff;text-decoration:inherit}a:hover{color:#535bf2}body{margin:0;display:flex;place-items:center;min-width:320px;min-height:100vh}h1{font-size:3.2em;line-height:1.1}button{border-radius:8px;border:1px solid transparent;padding:.6em 1.2em;font-size:1em;font-weight:500;font-family:inherit;background-color:#1a1a1a;cursor:pointer;transition:border-color .25s}button:hover{border-color:#646cff}button:focus,button:focus-visible{outline:4px auto -webkit-focus-ring-color}@media(prefers-color-scheme:light){:root{color:#213547;background-color:#fff}a:hover{color:#747bff}button{background-color:#f9f9f9}}
+
+===== FILE: ./ui/vite.config.ts =====
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+})
+
+===== FILE: ./ui/src/App.tsx =====
+import { Routes, Route, Navigate } from "react-router-dom"
+import { useState, useEffect } from "react"
+import Login from "./pages/Login"
+import Hosts from "./pages/Hosts"
+
+export default function App() {
+  const [token, setToken] = useState<string | null>(null)
+
+  useEffect(() => {
+    setToken(sessionStorage.getItem("apiKey"))
+  }, [])
+
+  const handleLogin = (newToken: string) => {
+    sessionStorage.setItem("apiKey", newToken)
+    setToken(newToken)
+  }
+
+  const handleLogout = () => {
+    sessionStorage.removeItem("apiKey")
+    setToken(null)
+  }
+
+  return (
+    <Routes>
+      <Route
+        path="/"
+        element={
+          token ? (
+            <Navigate to="/hosts" />
+          ) : (
+            <Login onLogin={handleLogin} />
+          )
+        }
+      />
+      <Route
+        path="/hosts"
+        element={
+          token ? (
+            <Hosts onLogout={handleLogout} />
+          ) : (
+            <Navigate to="/" />
+          )
+        }
+      />
+      <Route path="*" element={<Navigate to="/" />} />
+    </Routes>
+  )
+}
+
+===== FILE: ./ui/src/main.tsx =====
+import ReactDOM from "react-dom/client"
+import { BrowserRouter } from "react-router-dom"
+import App from "./App"
+import "./index.css"
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <BrowserRouter>
+    <App />
+  </BrowserRouter>
+)
+
+===== FILE: ./ui/src/auth/AuthContext.tsx =====
+
+===== FILE: ./ui/src/App.css =====
+#root {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+
+===== FILE: ./ui/src/index.css =====
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+
+===== FILE: ./ui/src/components/ContainerTable.tsx =====
+
+===== FILE: ./ui/src/components/HostTable.tsx =====
+interface Props {
+  hosts: any[]
+  onSelect: (id: string) => void
+}
+
+export default function HostTable({ hosts, onSelect }: Props) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Status</th>
+          <th>Last Seen</th>
+          <th>IP</th>
+          <th>OS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {hosts.map((h) => (
+          <tr key={h.agent_id} onClick={() => onSelect(h.agent_id)}>
+            <td>{h.hostname}</td>
+            <td className={h.alive ? "alive" : "dead"}>
+              {h.alive ? "Alive" : "Down"}
+            </td>
+            <td>{new Date(h.last_seen).toLocaleString()}</td>
+            <td>{h.ip}</td>
+            <td>{h.os}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+===== FILE: ./ui/src/components/LogViewer.tsx =====
+interface Props {
+  logs: any[]
+}
+
+export default function LogViewer({ logs }: Props) {
+  return (
+    <div className="log-box">
+      {logs.map((l, i) => (
+        <div key={i}>
+          {new Date(l.timestamp * 1000).toLocaleString()} [{l.level}] {l.message}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+===== FILE: ./ui/src/components/HostCard.tsx =====
+
+===== FILE: ./ui/src/hooks/useLogs.ts =====
+
+===== FILE: ./ui/src/hooks/useContainers.ts =====
+
+===== FILE: ./ui/src/hooks/useHosts.ts =====
+
+===== FILE: ./ui/src/api/client.ts =====
+function headers() {
+  const token = sessionStorage.getItem("apiKey")
+  return {
+    Authorization: "Bearer " + token,
+  }
+}
+
+export async function fetchHosts() {
+  const res = await fetch("/api/hosts", { headers: headers() })
+  if (!res.ok) throw new Error("Unauthorized")
+  return res.json()
+}
+
+export async function fetchLogs(agentId: string) {
+  const res = await fetch(
+    `/api/logs/fetch?agent_id=${agentId}`,
+    { headers: headers() }
+  )
+  if (!res.ok) throw new Error("Unauthorized")
+  return res.json()
+}
+
+export async function fetchHostSummary(agentId: string) {
+  const res = await fetch(`/api/hosts/summary`, {
+    headers: headers(),
+  })
+  const data = await res.json()
+  return data[agentId]
+}
+
+export async function fetchContainers(agentId: string) {
+  const res = await fetch(
+    `/api/containers?agent_id=${agentId}`,
+    { headers: headers() }
+  )
+  return res.json()
+}
+
+===== FILE: ./ui/src/pages/HostDetails.tsx =====
+interface Props {
+  agentId: string
+  onBack: () => void
+}
+
+export default function HostDetails({ agentId, onBack }: Props) {
+  return (
+    <div>
+      <button onClick={onBack}>⬅ Back</button>
+      <h2>Host Details</h2>
+      <p>Agent ID: {agentId}</p>
+    </div>
+  )
+}
+
+===== FILE: ./ui/src/pages/Hosts.tsx =====
+import { useEffect, useState } from "react"
+import HostTable from "../components/HostTable"
+import HostDetails from "./HostDetails"
+import { fetchHosts } from "../api/client"
+
+interface Props {
+  onLogout: () => void
+}
+
+export default function Hosts({ onLogout }: Props) {
+  const [hosts, setHosts] = useState<any[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
+
+  useEffect(() => {
+    loadHosts()
+    const interval = setInterval(loadHosts, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  async function loadHosts() {
+    const data = await fetchHosts()
+    setHosts(data)
+  }
+
+  if (selected) {
+    return (
+      <HostDetails
+        agentId={selected}
+        onBack={() => setSelected(null)}
+      />
+    )
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <h2>Fleet Overview</h2>
+        <button onClick={onLogout}>Logout</button>
+      </div>
+
+      <HostTable hosts={hosts} onSelect={setSelected} />
+    </div>
+  )
+}
+
+===== FILE: ./ui/src/pages/Login.tsx =====
+import { useState } from "react"
+
+interface Props {
+  onLogin: (token: string) => void
+}
+
+export default function Login({ onLogin }: Props) {
+  const [apiKey, setApiKey] = useState("")
+  const [error, setError] = useState("")
+
+  const handleLogin = () => {
+    if (!apiKey) {
+      setError("API key is required")
+      return
+    }
+
+    onLogin(apiKey)
+  }
+
+  return (
+    <div className="login-page-wrapper">
+      <div className="login-container">
+        <h1>OpsLens Pulse</h1>
+        <input
+          type="password"
+          placeholder="Paste API Key"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+        />
+        <button onClick={handleLogin}>Login</button>
+        {error && <div className="error">{error}</div>}
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./clickhouse/init/001_init.sql =====
+/* =========================================================
+   OpsLens Pulse – ClickHouse Init Schema
+   ========================================================= */
+
+CREATE DATABASE IF NOT EXISTS opslens;
+USE opslens;
+
+-- =========================================================
+-- Accounts
+-- =========================================================
+CREATE TABLE IF NOT EXISTS accounts
+(
+    account_id String,
+    name String,
+    created_at DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+ORDER BY account_id;
+
+-- =========================================================
+-- Agents (identity + metadata ONLY)
+-- =========================================================
+CREATE TABLE IF NOT EXISTS agents
+(
+    account_id  String,
+    agent_id    String,
+    hostname    String,
+    ip          String,
+    os          String,
+    version     String,
+    environment String,
+    tags        String,           -- JSON string
+    first_seen  DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+ORDER BY (account_id, agent_id);
+
+-- =========================================================
+-- Agent Heartbeats (ephemeral)
+-- =========================================================
+CREATE TABLE IF NOT EXISTS agent_heartbeats
+(
+    account_id String,
+    agent_id   String,
+    last_seen  DateTime
+)
+ENGINE = ReplacingMergeTree(last_seen)
+ORDER BY (account_id, agent_id);
+
+-- =========================================================
+-- Host Metrics (time-series)
+-- =========================================================
+CREATE TABLE IF NOT EXISTS metrics
+(
+    account_id     String,
+    agent_id       String,
+    hostname       String,
+    cpu_percent    Float32,
+    mem_used_mb    Float32,
+    mem_total_mb   Float32,
+    disk_used_mb   Float32,
+    disk_total_mb  Float32,
+    network_in_mb  Float32,
+    network_out_mb Float32,
+    uptime_sec     UInt64,
+    tags           String,
+    ts             DateTime,
+    ttl_days       UInt16 DEFAULT 90
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (account_id, agent_id, ts)
+TTL ts + toIntervalDay(ttl_days);
+
+-- =========================================================
+-- Host Metrics Aggregates
+-- =========================================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS metrics_aggregates
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (account_id, agent_id, ts)
+AS
+SELECT
+    account_id,
+    agent_id,
+    hostname,
+    ts,
+    avg(cpu_percent)  AS avg_cpu,
+    max(cpu_percent)  AS max_cpu,
+    avg(mem_used_mb)  AS avg_mem_used,
+    max(mem_used_mb)  AS max_mem_used
+FROM metrics
+GROUP BY account_id, agent_id, hostname, ts;
+
+-- =========================================================
+-- Host Logs (time-series)
+-- =========================================================
+CREATE TABLE IF NOT EXISTS logs
+(
+    account_id String,
+    agent_id   String,
+    hostname   String,
+    timestamp  DateTime, -- event time (from agent)
+    ingested_at  DateTime DEFAULT now(), -- server ingest time
+    level      String,
+    message    String,
+    tags       String,
+    ttl_days   UInt16 DEFAULT 90
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(ingested_at)
+ORDER BY (account_id, agent_id, timestamp)
+TTL timestamp + toIntervalDay(ttl_days);
+
+-- =========================================================
+-- API Keys
+-- =========================================================
+CREATE TABLE IF NOT EXISTS api_keys
+(
+    account_id   String,
+    key_id       String,
+    key_hash     String,
+    name         String,
+    is_active    UInt8,
+    is_bootstrap UInt8,
+    created_at   DateTime
+)
+ENGINE = MergeTree()
+ORDER BY (account_id, key_id);
+
+-- =========================================================
+-- Events / Alerts
+-- =========================================================
+CREATE TABLE IF NOT EXISTS events
+(
+    account_id String,
+    agent_id   String,
+    hostname   String,
+    ts         DateTime DEFAULT now(),
+    event_type String,
+    severity   String,
+    description String,
+    tags       String,
+    ttl_days   UInt16 DEFAULT 90
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (account_id, agent_id, ts)
+TTL ts + toIntervalDay(ttl_days);
+
+-- =========================================================
+-- Containers (identity)
+-- =========================================================
+CREATE TABLE IF NOT EXISTS containers
+(
+    account_id   String,
+    agent_id     String,
+    container_id String,
+    name          String,
+    image         String,
+    status        String,
+    first_seen    DateTime DEFAULT now()
+)
+ENGINE = MergeTree()
+ORDER BY (account_id, agent_id, container_id);
+
+-- =========================================================
+-- Container Metrics
+-- =========================================================
+CREATE TABLE IF NOT EXISTS container_metrics
+(
+    account_id     String,
+    agent_id       String,
+    container_id   String,
+    name           String,
+    cpu_percent    Float32,
+    mem_used_mb    Float32,
+    mem_total_mb   Float32,
+    network_in_mb  Float32,
+    network_out_mb Float32,
+    ts             DateTime,
+    ttl_days       UInt16 DEFAULT 90
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (account_id, agent_id, container_id, ts)
+TTL ts + toIntervalDay(ttl_days);
+
+-- =========================================================
+-- Container Metrics Aggregates
+-- =========================================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS container_metrics_aggregates
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (account_id, agent_id, container_id, ts)
+AS
+SELECT
+    account_id,
+    agent_id,
+    container_id,
+    name,
+    ts,
+    avg(cpu_percent) AS avg_cpu,
+    max(cpu_percent) AS max_cpu,
+    avg(mem_used_mb) AS avg_mem_used,
+    max(mem_used_mb) AS max_mem_used
+FROM container_metrics
+GROUP BY account_id, agent_id, container_id, name, ts;
+
+-- =========================================================
+-- Container Logs
+-- =========================================================
+CREATE TABLE IF NOT EXISTS container_logs
+(
+    account_id   String,
+    agent_id     String,
+    container_id String,
+    name          String,
+    timestamp     DateTime,
+    level         String,
+    message       String,
+    tags          String,
+    ttl_days      UInt16 DEFAULT 90
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (account_id, agent_id, container_id, timestamp)
+TTL timestamp + toIntervalDay(ttl_days);
+
+-- =========================================================
+-- Container Events
+-- =========================================================
+CREATE TABLE IF NOT EXISTS container_events
+(
+    account_id   String,
+    agent_id     String,
+    container_id String,
+    name          String,
+    ts            DateTime DEFAULT now(),
+    event_type    String,
+    severity      String,
+    description   String,
+    tags          String,
+    ttl_days      UInt16 DEFAULT 90
+)
+ENGINE = MergeTree()
+PARTITION BY toYYYYMM(ts)
+ORDER BY (account_id, agent_id, container_id, ts)
+TTL ts + toIntervalDay(ttl_days);
+
+===== FILE: ./server/config/config.go =====
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ServerConfig struct {
+	ListenPort int `yaml:"listen_port"`
+}
+
+type ClickHouseConfig struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	Database string `yaml:"database"`
+}
+
+func LoadClickHouse() ClickHouseConfig {
+	cfg := ClickHouseConfig{
+		Host:     os.Getenv("CLICKHOUSE_HOST"),
+		Port:     9000,
+		User:     os.Getenv("CLICKHOUSE_USER"),
+		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
+		Database: os.Getenv("CLICKHOUSE_DATABASE"),
+	}
+	if port := os.Getenv("CLICKHOUSE_PORT"); port != "" {
+		fmt.Sscanf(port, "%d", &cfg.Port)
+	}
+	return cfg
+}
+
+//	func (c ClickHouseConfig) DSN() string {
+//		return fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s",
+//			c.Host, c.Port, c.User, c.Password, c.Database)
+//	}
+func (c ClickHouseConfig) DSN() string {
+	if c.Database == "" {
+		c.Database = "default"
+	}
+	return fmt.Sprintf(
+		"tcp://%s:%d/%s?username=%s&password=%s",
+		c.Host,
+		c.Port,
+		c.Database,
+		c.User,
+		c.Password,
+	)
+}
+
+var DefaultPath string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		DefaultPath = `C:\ProgramData\OpsLens-Pulse\server-config.yaml`
+	} else {
+		DefaultPath = "/etc/opslens-pulse/server-config.yaml"
+	}
+}
+
+// LoadOrCreate returns: ServerConfig, path, created(bool), error
+func LoadOrCreate(path string) (ServerConfig, string, bool, error) {
+	var cfg ServerConfig
+
+	if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
+		path = env
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// create default config
+		cfg = ServerConfig{
+			ListenPort: 9898,
+		}
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+
+		return cfg, path, true, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return cfg, path, false, err
+	}
+	defer f.Close()
+
+	err = yaml.NewDecoder(f).Decode(&cfg)
+	return cfg, path, false, err
+}
+
+func save(path string, cfg ServerConfig) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return yaml.NewEncoder(f).Encode(cfg)
+}
+
+func (c ServerConfig) Validate() error {
+	if c.ListenPort <= 0 || c.ListenPort > 65535 {
+		return errors.New("listen_port must be between 1 and 65535")
+	}
+	return nil
+}
+
+===== FILE: ./server/api/token.go =====
+package api
+
+var authToken string
+
+func SetAuthToken(t string) {
+	authToken = t
+}
+
+func GetAuthToken() string {
+	return authToken
+}
+
+===== FILE: ./server/api/metrics.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func MetricsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var metrics shared.HostMetrics
+		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := store.UpsertAgentMetadata(metrics); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		if err := store.SaveMetrics(metrics); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./server/api/hosts.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"opslense-pulse/server/store"
+)
+
+func HostsHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accountID := r.URL.Query().Get("account_id")
+		if accountID == "" {
+			accountID = "default"
+		}
+
+		agents, err := st.ListAgents(accountID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(agents)
+	}
+}
+
+func HostSummaryHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		accountID := r.URL.Query().Get("account_id")
+		if accountID == "" {
+			accountID = "default"
+		}
+
+		data, err := st.GetLatestHostMetrics(accountID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		json.NewEncoder(w).Encode(data)
+	}
+}
+
+===== FILE: ./server/api/logs.go =====
+package api
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+	"strconv"
+	"time"
+)
+
+/*
+POST /api/logs
+Agent → Server (INSERT)
+*/
+func LogsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var batch shared.LogBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		log.Printf(
+			"📥 Inserting logs: account=%s agent=%s host=%s count=%d",
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			len(batch.Logs),
+		)
+
+		if batch.AccountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+		if batch.AgentID == "" {
+			http.Error(w, "missing agent_id", http.StatusBadRequest)
+			return
+		}
+		if batch.Hostname == "" {
+			http.Error(w, "missing hostname", http.StatusBadRequest)
+			return
+		}
+
+		if err := store.InsertLogs(batch); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+/*
+GET /api/logs/fetch
+UI → Server (QUERY)
+*/
+func FetchLogsHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		// ✅ Query params
+		accountID := r.URL.Query().Get("account_id")
+		agentID := r.URL.Query().Get("agent_id")
+		hostname := r.URL.Query().Get("hostname")
+		level := r.URL.Query().Get("level")
+		source := r.URL.Query().Get("source")
+
+		if accountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+
+		// Time range
+		var start, end time.Time
+
+		if v := r.URL.Query().Get("start"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+				start = time.Unix(ts, 0)
+			}
+		}
+
+		if v := r.URL.Query().Get("end"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+				end = time.Unix(ts, 0)
+			}
+		}
+
+		limit := 100
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
+			}
+		}
+
+		logs, err := s.GetLogs(
+			accountID,
+			hostname,
+			agentID,
+			start,
+			end,
+			level,
+			source,
+			limit,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(logs)
+	}
+}
+
+func LogSourcesHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agentID := r.URL.Query().Get("agent_id")
+		accountID := r.Context().Value("account_id").(string)
+
+		out, err := s.GetLogSources(accountID, agentID)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(out)
+	}
+}
+
+===== FILE: ./server/api/container.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func ContainerMetricsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var metrics shared.ContainerMetrics
+		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if metrics.AccountID == "" || metrics.ContainerID == "" {
+			http.Error(w, "missing account_id or container_id", http.StatusBadRequest)
+			return
+		}
+		if err := store.SaveContainerMetrics(metrics); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func ContainerLogsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var batch shared.ContainerLogBatch
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if batch.AccountID == "" {
+			http.Error(w, "missing account_id", http.StatusBadRequest)
+			return
+		}
+		if err := store.InsertContainerLogs(batch); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./server/api/heartbeat.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+func HeartbeatHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var hb shared.Heartbeat
+		if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
+			http.Error(w, "invalid payload", 400)
+			return
+		}
+
+		if hb.Timestamp.IsZero() {
+			hb.Timestamp = time.Now()
+		}
+
+		if err := st.UpsertAgentHeartbeat(hb); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./server/main.go =====
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+
+	"opslense-pulse/server/api"
+	"opslense-pulse/server/config"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+const ServerVersion = "1.0.0"
+
+// -------------------------------------------
+// Helpers
+// -------------------------------------------
+
+// Print CLI help
+func printHelp() {
+	fmt.Print(`
+OpsLens-Pulse Server
+
+Usage:
+  opslens-pulse-server [options]
+
+Options:
+  --config <path>     Path to config file
+  --version           Show version
+  --help              Show help
+
+Defaults:
+  Linux:   /etc/opslens-pulse/server-config.yaml
+  Windows: C:\ProgramData\OpsLens-Pulse\server-config.yaml
+
+Env:
+  OPS_SERVER_CONFIG
+`)
+}
+
+// Generate a random API key
+func generateAPIKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return "opl_" + hex.EncodeToString(b)
+}
+
+// Hash API key (SHA256)
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+// Bootstrap API key if DB is empty
+func bootstrapAPIKeyIfNeeded(s store.Store) error {
+	count, err := s.CountAPIKeys()
+	if err != nil {
+		return err
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	rawKey := generateAPIKey()
+	hash := hashAPIKey(rawKey)
+
+	err = s.InsertAPIKey(shared.APIKey{
+		AccountID:   "default",
+		KeyID:       uuid.NewString(),
+		KeyHash:     hash,
+		Name:        "bootstrap-admin",
+		IsActive:    1,
+		IsBootstrap: 1,
+		CreatedAt:   time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("========================================")
+	fmt.Println(" OpsLens Pulse – Bootstrap API Key")
+	fmt.Println("========================================")
+	fmt.Println(" THIS KEY IS SHOWN ONLY ONCE")
+	fmt.Println()
+	fmt.Println(" API KEY:")
+	fmt.Println(" ", rawKey)
+	fmt.Println()
+	fmt.Println(" Store it securely. It cannot be recovered.")
+	fmt.Println("========================================")
+
+	return nil
+}
+
+// Auth wrapper for API handlers
+func makeAuthHandler(st store.Store, handler func(store.Store) http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		header := r.Header.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		rawKey := strings.TrimPrefix(header, "Bearer ")
+		ok, err := st.ValidateAPIKey(rawKey)
+		if err != nil || !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ctx := context.WithValue(r.Context(), "account_id", "default")
+		handler(st)(w, r.WithContext(ctx))
+	}
+}
+
+// -------------------------------------------
+// Main
+// -------------------------------------------
+
+func main() {
+	shared.InitLogger("server")
+	log.Println("🚀 OpsLens-Pulse Server starting...")
+
+	// CLI flags
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Path to config file")
+	showHelp := flag.Bool("help", false, "Help")
+	showVersion := flag.Bool("version", false, "Version")
+	flag.Parse()
+
+	if *showHelp {
+		printHelp()
+		return
+	}
+	if *showVersion {
+		fmt.Println(ServerVersion)
+		return
+	}
+
+	// Load server config
+	cfg, path, created, err := config.LoadOrCreate(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("📄 Server config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Server config loaded from: %s\n", path)
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid server config: %v", err)
+	}
+
+	// -------------------------------
+	// Connect to ClickHouse or fallback to MemoryStore
+	// -------------------------------
+	var st store.Store
+	chcfg := config.LoadClickHouse()
+	chStore, err := store.NewClickHouseStore(chcfg.DSN())
+	if err != nil {
+		//log.Println("ClickHouse unavailable, falling back to MemoryStore:", err)
+		// st = store.NewMemoryStore()
+		log.Fatalf("❌ ClickHouse connection FAILED: %v", err)
+	} else {
+		log.Println("✅ Connected to ClickHouse")
+		st = chStore
+	}
+
+	// Bootstrap API key
+	if err := bootstrapAPIKeyIfNeeded(st); err != nil {
+		log.Fatalf("Failed to bootstrap API key: %v", err)
+	}
+
+	// -------------------------------
+	// Serve React (Vite production build)
+	// -------------------------------
+
+	uiPath := "./ui/dist"
+
+	// Serve static assets directly
+	http.Handle("/assets/",
+		http.StripPrefix("/assets/",
+			http.FileServer(http.Dir(filepath.Join(uiPath, "assets"))),
+		),
+	)
+
+	// Serve favicon / vite.svg if needed
+	http.Handle("/vite.svg",
+		http.FileServer(http.Dir(uiPath)),
+	)
+
+	// SPA fallback for everything else (but not /api)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+		// If this is an API route, let registered handlers process it
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		http.ServeFile(w, r, filepath.Join(uiPath, "index.html"))
+	})
+
+	// -------------------------------
+	// API routes - WITH AUTHENTICATION
+	// -------------------------------
+	http.HandleFunc("/api/metrics", makeAuthHandler(st, api.MetricsHandler))
+	http.HandleFunc("/api/heartbeat", makeAuthHandler(st, api.HeartbeatHandler))
+	http.HandleFunc("/api/hosts", makeAuthHandler(st, api.HostsHandler))
+	http.HandleFunc("/api/hosts/summary", makeAuthHandler(st, api.HostSummaryHandler))
+	http.HandleFunc("/api/logs", makeAuthHandler(st, api.LogsHandler))
+	http.HandleFunc("/api/logs/fetch", makeAuthHandler(st, api.FetchLogsHandler))
+	http.HandleFunc("/api/container/metrics", makeAuthHandler(st, api.ContainerMetricsHandler))
+	http.HandleFunc("/api/container/logs", makeAuthHandler(st, api.ContainerLogsHandler))
+	http.HandleFunc("/api/logs/sources", makeAuthHandler(st, api.LogSourcesHandler))
+
+	// -------------------------------
+	// Start server
+	// -------------------------------
+	addr := fmt.Sprintf(":%d", cfg.ListenPort)
+	log.Println("Server listening on", addr)
+
+	srv := &http.Server{
+		Addr:           addr,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// -------------------------------
+	// Graceful shutdown
+	// -------------------------------
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+
+	log.Println("Shutting down server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+	log.Println("Server stopped")
+}
+
+===== FILE: ./server/store/types.go =====
+package store
+
+import "opslense-pulse/shared"
+
+type HostState struct {
+	IP       string
+	Metrics  shared.HostMetrics
+	Logs     []shared.LogEntry
+	LastSeen int64
+}
+
+===== FILE: ./server/store/memory_store.go =====
+package store
+
+import (
+	"opslense-pulse/shared"
+	"sync"
+	"time"
+)
+
+// -------------------------------
+// MemoryStore struct
+// -------------------------------
+type MemoryStore struct {
+	mu         sync.RWMutex
+	hosts      map[string]*HostState
+	apiKeys    map[string]shared.APIKey
+	containers map[string]*ContainerState
+}
+
+type ContainerState struct {
+	Metrics  shared.ContainerMetrics
+	Logs     []string
+	LastSeen time.Time
+}
+
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		hosts:      make(map[string]*HostState),
+		apiKeys:    make(map[string]shared.APIKey),
+		containers: make(map[string]*ContainerState),
+	}
+}
+
+func (m *MemoryStore) SaveContainerMetrics(metrics shared.ContainerMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := metrics.Hostname + ":" + metrics.ContainerID
+	c, ok := m.containers[key]
+	if !ok {
+		c = &ContainerState{}
+		m.containers[key] = c
+	}
+	c.Metrics = metrics
+	c.LastSeen = time.Now()
+	return nil
+}
+
+func (m *MemoryStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, l := range batch.Logs {
+		key := batch.Hostname + ":" + l.ContainerID
+		c, ok := m.containers[key]
+		if !ok {
+			c = &ContainerState{}
+			m.containers[key] = c
+		}
+
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		c.Logs = append(c.Logs, l.Message+" ["+t.Format("2006-01-02 15:04:05")+"]")
+		c.LastSeen = t
+	}
+	return nil
+}
+
+// -------------------------------
+// SaveMetrics: store host metrics
+// -------------------------------
+func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[metrics.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[metrics.Hostname] = h
+	}
+
+	h.Metrics = metrics
+	h.LastSeen = time.Now().Unix()
+
+	if ip, ok := metrics.Tags["ip"]; ok {
+		h.IP = ip
+	}
+
+	return nil
+}
+
+// -------------------------------
+// Logs
+// -------------------------------
+func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[batch.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[batch.Hostname] = h
+	}
+
+	for _, l := range batch.Logs {
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		h.Logs = append(h.Logs, shared.LogEntry{
+			AccountID: l.AccountID,
+			AgentID:   l.AgentID,
+			Hostname:  l.Hostname,
+			Level:     l.Level,
+			Message:   l.Message + " [" + t.Format("2006-01-02 15:04:05") + "]",
+			Timestamp: l.Timestamp,
+			Tags:      l.Tags,
+		})
+	}
+	return nil
+}
+
+// -------------------------------
+// Fetch logs
+// -------------------------------
+func (m *MemoryStore) GetLogs(
+	accountID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	source string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []shared.LogEntry
+
+	for _, h := range m.hosts {
+		for _, l := range h.Logs {
+
+			if accountID != "" && l.AccountID != accountID {
+				continue
+			}
+			if agentID != "" && l.AgentID != agentID {
+				continue
+			}
+			if hostname != "" && l.Hostname != hostname {
+				continue
+			}
+			if level != "" && l.Level != level {
+				continue
+			}
+			if source != "" {
+				if src, ok := l.Tags["source"]; !ok || src != source {
+					continue
+				}
+			}
+
+			t := time.Unix(l.Timestamp, 0)
+			if !from.IsZero() && t.Before(from) {
+				continue
+			}
+			if !to.IsZero() && t.After(to) {
+				continue
+			}
+
+			out = append(out, l)
+
+			if limit > 0 && len(out) >= limit {
+				return out, nil
+			}
+		}
+	}
+
+	return out, nil
+}
+
+func (m *MemoryStore) GetLogSources(accountID, agentID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+
+	for _, h := range m.hosts {
+		for _, l := range h.Logs {
+			if l.AccountID != accountID || l.AgentID != agentID {
+				continue
+			}
+			if src, ok := l.Tags["source"]; ok {
+				seen[src] = struct{}{}
+			}
+		}
+	}
+
+	var out []string
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// -------------------------------
+// API Keys
+// -------------------------------
+func (m *MemoryStore) CountAPIKeys() (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.apiKeys), nil
+}
+
+func (m *MemoryStore) InsertAPIKey(k shared.APIKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.apiKeys[k.KeyHash] = k
+	return nil
+}
+
+func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, error) {
+	hash := hashAPIKey(rawKey)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.apiKeys[hash]
+	return ok, nil
+}
+
+func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[hb.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[hb.Hostname] = h
+	}
+	h.LastSeen = hb.Timestamp.Unix()
+	return nil
+}
+
+func (m *MemoryStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var agents []shared.AgentInfo
+
+	for hostname, h := range m.hosts {
+		agents = append(agents, shared.AgentInfo{
+			AccountID: accountID,
+			Hostname:  hostname,
+			LastSeen:  time.Unix(h.LastSeen, 0),
+		})
+	}
+
+	return agents, nil
+}
+
+func (m *MemoryStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Memory store does not persist time-series metrics
+	// Return empty map so UI still works
+	return map[string]shared.HostMetrics{}, nil
+}
+
+func (m *MemoryStore) UpsertAgentMetadata(hm shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.hosts[hm.AgentID]
+	if !ok {
+		// first time we see this agent
+		state = &HostState{
+			Metrics:  hm,
+			LastSeen: time.Now().Unix(),
+		}
+		m.hosts[hm.AgentID] = state
+	} else {
+		// update metadata only
+		state.Metrics.Hostname = hm.Hostname
+		state.Metrics.IP = hm.IP
+		state.Metrics.OS = hm.OS
+		state.Metrics.Tags = hm.Tags
+	}
+
+	return nil
+}
+
+var _ Store = (*MemoryStore)(nil)
+
+===== FILE: ./server/store/store_interface.go =====
+package store
+
+import (
+	"opslense-pulse/shared"
+	"time"
+)
+
+type Store interface {
+	// Ingest
+	SaveMetrics(m shared.HostMetrics) error
+	InsertLogs(batch shared.LogBatch) error
+	SaveContainerMetrics(m shared.ContainerMetrics) error
+	InsertContainerLogs(batch shared.ContainerLogBatch) error
+	UpsertAgentHeartbeat(hb shared.Heartbeat) error
+	UpsertAgentMetadata(m shared.HostMetrics) error
+	ListAgents(accountID string) ([]shared.AgentInfo, error)
+	GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error)
+	GetLogSources(accountID, agentID string) ([]string, error)
+
+	// Query
+	GetLogs(
+		accountID string,
+		hostname string,
+		agentID string,
+		from, to time.Time,
+		level string,
+		source string,
+		limit int,
+	) ([]shared.LogEntry, error)
+
+	// API keys
+	InsertAPIKey(k shared.APIKey) error
+	ValidateAPIKey(rawKey string) (bool, error)
+	CountAPIKeys() (int, error)
+}
+
+===== FILE: ./server/store/clickhouse_store.go =====
+package store
+
+import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"log"
+	"time"
+
+	"opslense-pulse/shared"
+
+	_ "github.com/ClickHouse/clickhouse-go/v2"
+)
+
+// -------------------------------
+// ClickHouseStore
+// -------------------------------
+type ClickHouseStore struct {
+	db *sql.DB
+}
+
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewClickHouseStore(dsn string) (*ClickHouseStore, error) {
+	log.Println("🧪 ClickHouse DSN:", dsn)
+	db, err := sql.Open("clickhouse", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(15 * time.Minute)
+
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
+	return &ClickHouseStore{db: db}, nil
+}
+
+// -------------------------------
+// API Keys
+// -------------------------------
+func hashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+func (c *ClickHouseStore) CountAPIKeys() (int, error) {
+	row := c.db.QueryRow(`SELECT count() FROM api_keys`)
+	var count uint64
+	if err := row.Scan(&count); err != nil {
+		return 0, err
+	}
+	return int(count), nil
+}
+
+func (c *ClickHouseStore) InsertAPIKey(k shared.APIKey) error {
+	_, err := c.db.Exec(`
+		INSERT INTO api_keys
+		(account_id, key_id, key_hash, name, is_active, is_bootstrap, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`,
+		k.AccountID,
+		k.KeyID,
+		k.KeyHash,
+		k.Name,
+		k.IsActive,
+		k.IsBootstrap,
+		time.Now(),
+	)
+	return err
+}
+
+func (c *ClickHouseStore) ValidateAPIKey(rawKey string) (bool, error) {
+	hash := hashAPIKey(rawKey)
+	row := c.db.QueryRow(`
+		SELECT count()
+		FROM api_keys
+		WHERE key_hash = ?
+		  AND is_active = 1
+		LIMIT 1
+	`, hash)
+
+	var count uint64
+	if err := row.Scan(&count); err != nil {
+		return false, err
+	}
+	if count == 0 {
+		return false, errors.New("invalid or inactive api key")
+	}
+	return true, nil
+}
+
+// -------------------------------
+// Host Metrics (time-series ONLY)
+// -------------------------------
+func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	ttl := m.TTLDays
+	if ttl == 0 {
+		ttl = 90
+	}
+
+	ts := time.Now()
+	if m.Timestamp > 0 {
+		if m.Timestamp > 1e12 {
+			ts = time.UnixMilli(m.Timestamp)
+		} else {
+			ts = time.Unix(m.Timestamp, 0)
+		}
+	}
+
+	_, err := c.db.Exec(`
+		INSERT INTO metrics
+		(account_id, agent_id, hostname,
+		 cpu_percent, mem_used_mb, mem_total_mb,
+		 disk_used_mb, disk_total_mb,
+		 network_in_mb, network_out_mb,
+		 uptime_sec, tags, ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.Hostname,
+		m.CPUPercent,
+		m.MemUsedMB,
+		m.MemTotalMB,
+		m.DiskUsedMB,
+		m.DiskTotalMB,
+		m.NetworkInMB,
+		m.NetworkOutMB,
+		m.UptimeSec,
+		string(tagsJSON),
+		ts,
+		ttl,
+	)
+
+	return err
+}
+
+// -------------------------------
+// Logs Query
+// -------------------------------
+func (c *ClickHouseStore) GetLogs(
+	accountID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	source string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT
+			agent_id,
+			hostname,
+			timestamp,
+			level,
+			message,
+			tags
+		FROM logs
+		WHERE account_id = ?
+	`
+	args := []any{accountID}
+
+	if source != "" {
+		query += " AND JSONExtractString(tags, 'source') = ?"
+		args = append(args, source)
+	}
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+	if hostname != "" {
+		query += " AND hostname = ?"
+		args = append(args, hostname)
+	}
+	if !from.IsZero() {
+		query += " AND timestamp >= ?"
+		args = append(args, from)
+	}
+	if !to.IsZero() {
+		query += " AND timestamp <= ?"
+		args = append(args, to)
+	}
+	if level != "" {
+		query += " AND level = ?"
+		args = append(args, level)
+	}
+
+	query += " ORDER BY timestamp DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	logs := make([]shared.LogEntry, 0)
+
+	for rows.Next() {
+		var le shared.LogEntry
+		var ts time.Time
+		var tagsJSON string
+
+		if err := rows.Scan(
+			&le.AgentID,
+			&le.Hostname,
+			&ts,
+			&le.Level,
+			&le.Message,
+			&tagsJSON,
+		); err != nil {
+			continue
+		}
+
+		le.AccountID = accountID
+		le.Timestamp = ts.Unix()
+		le.HumanTime = ts.Format("2006-01-02 15:04:05")
+
+		if tagsJSON != "" && json.Valid([]byte(tagsJSON)) {
+			_ = json.Unmarshal([]byte(tagsJSON), &le.Tags)
+		}
+
+		logs = append(logs, le)
+	}
+
+	if err := rows.Err(); err != nil {
+		return logs, err
+	}
+
+	return logs, nil
+}
+
+// -------------------------------
+// Agent Metadata (identity + tags)
+// -------------------------------
+func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	_, err := c.db.Exec(`
+		INSERT INTO agents
+		(account_id, agent_id, hostname, ip, os, version, environment, tags)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.Hostname,
+		m.IP,
+		m.OS,
+		m.Version,
+		m.Tags["env"],
+		string(tagsJSON),
+	)
+	return err
+}
+
+// -------------------------------
+// Agent Heartbeat
+// -------------------------------
+func (c *ClickHouseStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+	_, err := c.db.Exec(`
+		INSERT INTO agent_heartbeats
+		(account_id, agent_id, last_seen)
+		VALUES (?, ?, ?)
+	`,
+		hb.AccountID,
+		hb.AgentID,
+		hb.Timestamp,
+	)
+	return err
+}
+
+// -------------------------------
+// Hosts Listing (JOIN + alive)
+// -------------------------------
+func (c *ClickHouseStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+	rows, err := c.db.Query(`
+		SELECT
+			a.account_id,
+			a.agent_id,
+			any(a.hostname) AS hostname,
+			any(a.ip) AS ip,
+			any(a.os) AS os,
+			any(a.version) AS version,
+			any(a.environment) AS environment,
+			any(a.tags) AS tags,
+			min(a.first_seen) AS first_seen,
+			max(h.last_seen) AS last_seen
+		FROM agents a
+		LEFT JOIN agent_heartbeats h
+		  ON a.account_id = h.account_id
+		 AND a.agent_id = h.agent_id
+		WHERE a.account_id = ?
+		GROUP BY a.account_id, a.agent_id
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []shared.AgentInfo
+	for rows.Next() {
+		var ai shared.AgentInfo
+		var tagsJSON string
+
+		if err := rows.Scan(
+			&ai.AccountID,
+			&ai.AgentID,
+			&ai.Hostname,
+			&ai.IP,
+			&ai.OS,
+			&ai.Version,
+			&ai.Environment,
+			&tagsJSON,
+			&ai.FirstSeen,
+			&ai.LastSeen,
+		); err != nil {
+			return nil, err
+		}
+
+		_ = json.Unmarshal([]byte(tagsJSON), &ai.Tags)
+		ai.Alive = time.Since(ai.LastSeen) <= 10*time.Second
+
+		out = append(out, ai)
+	}
+
+	return out, nil
+}
+
+// -------------------------------
+// Container Logs
+// -------------------------------
+func (c *ClickHouseStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO container_logs
+		(account_id, agent_id, hostname, container_id, name,
+		 timestamp, level, message, tags, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, l := range batch.Logs {
+		ts := time.Now()
+		if l.Timestamp > 0 {
+			if l.Timestamp > 1e12 {
+				ts = time.UnixMilli(l.Timestamp)
+			} else {
+				ts = time.Unix(l.Timestamp, 0)
+			}
+		}
+
+		level := l.Level
+		if level == "" {
+			level = "info"
+		}
+
+		tagsJSON, _ := json.Marshal(l.Tags)
+
+		ttl := l.TTLDays
+		if ttl == 0 {
+			ttl = 90
+		}
+		log.Printf(
+			"🧪 CH INSERT logs: account=%s agent=%s host=%s ts=%v",
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			ts,
+		)
+		_, err := stmt.Exec(
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			l.ContainerID,
+			l.ContainerName,
+			ts,
+			level,
+			l.Message,
+			string(tagsJSON),
+			ttl,
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// -------------------------------
+// Host Logs
+// -------------------------------
+func (c *ClickHouseStore) InsertLogs(batch shared.LogBatch) error {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO logs
+		(account_id, agent_id, hostname, timestamp, level, message, tags, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, l := range batch.Logs {
+		ts := time.Now()
+		if l.Timestamp > 0 {
+			if l.Timestamp > 1e12 {
+				ts = time.UnixMilli(l.Timestamp)
+			} else {
+				ts = time.Unix(l.Timestamp, 0)
+			}
+		}
+
+		level := l.Level
+		if level == "" {
+			level = "info"
+		}
+
+		tagsJSON, _ := json.Marshal(l.Tags)
+
+		ttl := l.TTLDays
+		if ttl == 0 {
+			ttl = 90
+		}
+
+		_, err := stmt.Exec(
+			batch.AccountID,
+			batch.AgentID,
+			batch.Hostname,
+			ts,
+			level,
+			l.Message,
+			string(tagsJSON),
+			ttl,
+		)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+// -------------------------------
+// Container Metrics
+// -------------------------------
+func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error {
+	ts := time.Now()
+	if m.Timestamp > 0 {
+		if m.Timestamp > 1e12 {
+			ts = time.UnixMilli(m.Timestamp)
+		} else {
+			ts = time.Unix(m.Timestamp, 0)
+		}
+	}
+
+	ttl := m.TTLDays
+	if ttl == 0 {
+		ttl = 90
+	}
+
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	_, err := c.db.Exec(`
+		INSERT INTO container_metrics
+		(account_id, agent_id, container_id, name,
+		 cpu_percent, mem_used_mb, mem_total_mb,
+		 disk_used_mb, disk_total_mb,
+		 network_in_mb, network_out_mb,
+		 tags, ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.AccountID,
+		m.AgentID,
+		m.ContainerID,
+		m.ContainerName,
+		m.CPUPercent,
+		m.MemUsedMB,
+		m.MemTotalMB,
+		m.DiskUsedMB,
+		m.DiskTotalMB,
+		m.NetworkInMB,
+		m.NetworkOutMB,
+		string(tagsJSON),
+		ts,
+		ttl,
+	)
+
+	return err
+}
+
+func (c *ClickHouseStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+	rows, err := c.db.Query(`
+		SELECT
+			agent_id,
+			hostname,
+			argMax(cpu_percent, ts),
+			argMax(mem_used_mb, ts),
+			argMax(mem_total_mb, ts),
+			argMax(uptime_sec, ts)
+		FROM metrics
+		WHERE account_id = ?
+		GROUP BY agent_id, hostname
+	`, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]shared.HostMetrics)
+
+	for rows.Next() {
+		var m shared.HostMetrics
+		if err := rows.Scan(
+			&m.AgentID,
+			&m.Hostname,
+			&m.CPUPercent,
+			&m.MemUsedMB,
+			&m.MemTotalMB,
+			&m.UptimeSec,
+		); err != nil {
+			return nil, err
+		}
+		out[m.AgentID] = m
+	}
+
+	return out, nil
+}
+
+func (c *ClickHouseStore) GetLogSources(
+	accountID, agentID string,
+) ([]string, error) {
+
+	rows, err := c.db.Query(`
+		SELECT DISTINCT JSONExtractString(tags, 'source')
+		FROM logs
+		WHERE account_id = ?
+		  AND agent_id = ?
+		  AND JSONHas(tags, 'source')
+	`, accountID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sources []string
+	for rows.Next() {
+		var src string
+		if err := rows.Scan(&src); err == nil && src != "" {
+			sources = append(sources, src)
+		}
+	}
+	return sources, nil
+}
+
+// -------------------------------
+// Interface check
+// -------------------------------
+var _ Store = (*ClickHouseStore)(nil)
+
+===== FILE: ./agent/metrics/memory.go =====
+// agent/metrics/memory.go
+package metrics
+
+import (
+	"github.com/shirou/gopsutil/v3/mem"
+)
+
+func Memory() (uint64, uint64) {
+	m, err := mem.VirtualMemory()
+	if err != nil {
+		return 0, 0
+	}
+	return m.Total / 1024 / 1024, m.Used / 1024 / 1024
+}
+
+===== FILE: ./agent/metrics/cpu.go =====
+// agent/metrics/cpu.go
+package metrics
+
+import "github.com/shirou/gopsutil/v3/cpu"
+
+func CPUPercent() float64 {
+	p, err := cpu.Percent(0, false)
+	if err != nil || len(p) == 0 {
+		return 0
+	}
+	return p[0]
+}
+
+===== FILE: ./agent/metrics/host.go =====
+// agent/metrics/host.go
+package metrics
+
+import (
+	"github.com/shirou/gopsutil/v3/host"
+	"runtime"
+)
+
+func HostInfo() (string, uint64) {
+	h, err := host.Info()
+	if err != nil {
+		return runtime.GOOS, 0
+	}
+	return runtime.GOOS, h.Uptime
+}
+
+===== FILE: ./agent/identity/identity.go =====
+package identity
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+func agentIDPath() string {
+	if runtime.GOOS == "windows" {
+		return `C:\ProgramData\OpsLens-Pulse\agent-id`
+	}
+	return "/var/lib/opslens-pulse/agent-id"
+}
+
+func LoadOrCreateAgentID() (string, error) {
+	path := agentIDPath()
+
+	// Check if the file exists
+	if data, err := os.ReadFile(path); err == nil {
+		return strings.TrimSpace(string(data)), nil
+	}
+
+	id := generateRandomID()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(id), 0644); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func generateRandomID() string {
+	b := make([]byte, 8) // 128-bit ID
+	_, _ = rand.Read(b)
+	return "agt_" + hex.EncodeToString(b)
+}
+
+===== FILE: ./agent/config/config.go =====
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ServerConfig struct {
+	URL    string `yaml:"url"`
+	APIKey string `yaml:"api_key"`
+}
+
+type LogSource struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"` // file | directory | command
+	Path    string   `yaml:"path,omitempty"`
+	Command string   `yaml:"command,omitempty"`
+	Include []string `yaml:"include,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty"`
+}
+
+type AgentConfig struct {
+	IntervalSeconds              int         `yaml:"interval_seconds"`
+	SelfUpgrade                  bool        `yaml:"self_upgrade"`
+	Logs                         []LogSource `yaml:"logs"`
+	LogCollectionIntervalSeconds int         `yaml:"log_collection_interval_seconds"`
+}
+
+type Config struct {
+	Server    ServerConfig      `yaml:"server"`
+	Agent     AgentConfig       `yaml:"agent"`
+	Tags      map[string]string `yaml:"tags"`
+	AccountID string            `yaml:"account_id"`
+}
+
+var DefaultPath string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		DefaultPath = `C:\ProgramData\OpsLens-Pulse\agent-config.yaml`
+	} else {
+		DefaultPath = "/etc/opslens-pulse/agent-config.yaml"
+	}
+}
+
+// LoadOrCreateConfig returns: Config, path, created(bool), error
+func LoadOrCreateConfig(path string) (Config, string, bool, error) {
+	var cfg Config
+	created := false
+
+	// Allow env ONLY to override config path
+	if env := os.Getenv("OPS_AGENT_CONFIG"); env != "" {
+		path = env
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+
+	// Create default config if missing
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg = defaultConfig()
+
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+
+		created = true
+		return cfg, path, created, nil
+	}
+
+	// Load existing config
+	f, err := os.Open(path)
+	if err != nil {
+		return cfg, path, false, err
+	}
+	defer f.Close()
+
+	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+		return cfg, path, false, err
+	}
+
+	return cfg, path, false, nil
+}
+
+func (c Config) Validate() error {
+	if c.Server.URL == "" {
+		return errors.New("server.url must be set")
+	}
+	if c.Server.APIKey == "" {
+		return errors.New("server.api_key must be set")
+	}
+	if c.Agent.IntervalSeconds <= 0 {
+		return errors.New("agent.interval_seconds must be > 0")
+	}
+
+	// Logs are OPTIONAL – defaults may be injected later
+	if len(c.Agent.Logs) > 0 {
+		if c.Agent.LogCollectionIntervalSeconds <= 0 {
+			return errors.New("agent.log_collection_interval_seconds must be > 0")
+		}
+
+		for i, src := range c.Agent.Logs {
+			if src.Name == "" {
+				return fmt.Errorf("agent.logs[%d].name is required", i)
+			}
+			if src.Type == "" {
+				return fmt.Errorf("agent.logs[%d].type is required", i)
+			}
+
+			switch src.Type {
+			case "file":
+				if src.Path == "" {
+					return fmt.Errorf("agent.logs[%d].path is required for type=file", i)
+				}
+			case "directory":
+				if src.Path == "" {
+					return fmt.Errorf("agent.logs[%d].path is required for type=directory", i)
+				}
+			case "command":
+				if src.Command == "" {
+					return fmt.Errorf("agent.logs[%d].command is required for type=command", i)
+				}
+			default:
+				return fmt.Errorf(
+					"agent.logs[%d].type must be one of: file, directory, command",
+					i,
+				)
+			}
+		}
+	}
+
+	return nil
+}
+
+func defaultConfig() Config {
+	return Config{
+		Server: ServerConfig{
+			URL:    "http://localhost:9898",
+			APIKey: "",
+		},
+		Agent: AgentConfig{
+			IntervalSeconds:              5,
+			SelfUpgrade:                  false,
+			Logs:                         nil,
+			LogCollectionIntervalSeconds: 10,
+		},
+		Tags: map[string]string{
+			"env": "dev",
+		},
+		AccountID: "default",
+	}
+}
+
+func save(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := yaml.NewEncoder(f)
+	enc.SetIndent(2)
+	return enc.Encode(cfg)
+}
+
+===== FILE: ./agent/sender/http.go =====
+package sender
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"opslense-pulse/shared"
+)
+
+// Send sends host metrics to server
+func Send(serverURL, apiKey string, metrics shared.HostMetrics) error {
+	body, err := json.Marshal(metrics)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", serverURL+"/api/metrics", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SendHeartbeat sends heartbeat info
+func SendHeartbeat(serverURL, apiKey string, hb shared.Heartbeat) error {
+	body, _ := json.Marshal(hb)
+
+	req, _ := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// SendContainerMetrics sends container metrics to server
+func SendContainerMetrics(serverURL, apiKey string, m shared.ContainerMetrics) error {
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", serverURL+"/api/container/metrics", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SendContainerLogs sends container logs to server
+func SendContainerLogs(serverURL, apiKey string, batch shared.ContainerLogBatch) error {
+	body, err := json.Marshal(batch)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", serverURL+"/api/container/logs", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+===== FILE: ./agent/sender/logs.go =====
+package sender
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+)
+
+// LogEntry represents a log entry
+type LogEntry struct {
+	AccountID string            `json:"account_id"`
+	AgentID   string            `json:"agent_id"`
+	Hostname  string            `json:"hostname"`
+	Timestamp int64             `json:"timestamp"`
+	Level     string            `json:"level"`
+	Message   string            `json:"message"`
+	Tags      map[string]string `json:"tags"`
+}
+
+type LogBatch struct {
+	AccountID string     `json:"account_id"`
+	AgentID   string     `json:"agent_id"`
+	Hostname  string     `json:"hostname"`
+	Logs      []LogEntry `json:"logs"`
+}
+
+func SendLogs(serverURL, apiKey string, payload LogBatch) error {
+	log.Printf(
+		"🚨 SEND LOGS CALLED: account=%s agent=%s host=%s count=%d server=%s",
+		payload.AccountID,
+		payload.AgentID,
+		payload.Hostname,
+		len(payload.Logs),
+		serverURL,
+	)
+	body, error := json.Marshal(payload)
+
+	if error != nil {
+		return error
+	}
+	log.Printf("📦 LOG PAYLOAD: %s", string(body))
+	req, err := http.NewRequest("POST", serverURL+"/api/logs", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	fmt.Println("📤 POST /api/logs →", serverURL)
+	fmt.Printf("📦 Payload size: %d logs\n", len(payload.Logs))
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	fmt.Println("📥 Response status:", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+===== FILE: ./agent/collector/container_metrics.go =====
+package collector
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/sender"
+)
+
+var (
+	lastMetrics     = make(map[string]time.Time) // containerID -> last sent time
+	lastMetricsFile = filepath.Join(BaseDir, "container_metrics.json")
+	lastMetricsLock = &sync.Mutex{}
+)
+
+// loadLastMetrics loads last sent timestamps from disk
+func loadLastMetrics() {
+	data, err := os.ReadFile(lastMetricsFile)
+	if err != nil {
+		return
+	}
+	lastMetricsLock.Lock()
+	defer lastMetricsLock.Unlock()
+	_ = json.Unmarshal(data, &lastMetrics)
+}
+
+// saveLastMetrics persists timestamps to disk
+func saveLastMetrics() {
+	lastMetricsLock.Lock()
+	defer lastMetricsLock.Unlock()
+
+	data, err := json.Marshal(lastMetrics)
+	if err != nil {
+		log.Println("Error marshaling container metrics data:", err)
+		return
+	}
+
+	if err := os.WriteFile(lastMetricsFile, data, 0644); err != nil {
+		log.Println("Error writing container metrics file:", err)
+	}
+}
+
+// StartContainerMetricsCollector collects metrics from running Docker containers
+func StartContainerMetricsCollector(
+	ctx context.Context,
+	agentID, accountID, hostname, serverURL, apiKey string,
+	intervalSeconds int,
+) {
+	loadLastMetrics()
+
+	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("📦 Container metrics collector stopped")
+			saveLastMetrics()
+			return
+
+		case <-ticker.C:
+			list, err := containers.ListRunning()
+			if err != nil {
+				log.Println("Error listing containers:", err)
+				continue
+			}
+
+			for _, c := range list {
+				raw, err := containers.GetContainerMetrics(c)
+				if err != nil {
+					continue
+				}
+
+				lastMetricsLock.Lock()
+				lastSent := lastMetrics[c.ID]
+				lastMetricsLock.Unlock()
+
+				// Skip if nothing new (defensive, metrics usually always advance)
+				if !lastSent.IsZero() && !raw.Timestamp.After(lastSent) {
+					continue
+				}
+
+				metric := containers.ToSharedMetrics(
+					raw,
+					accountID,
+					agentID,
+					hostname,
+				)
+
+				if err := retrySend(3, 2*time.Second, func() error {
+					return sender.SendContainerMetrics(serverURL, apiKey, metric)
+				}); err != nil {
+					log.Println("Container metrics send failed:", err)
+					continue
+				}
+
+				lastMetricsLock.Lock()
+				lastMetrics[c.ID] = raw.Timestamp
+				lastMetricsLock.Unlock()
+
+				saveLastMetrics()
+			}
+		}
+	}
+}
+
+// retrySend retries the provided function with exponential backoff
+// func retrySend(attempts int, baseDelay time.Duration, fn func() error) error {
+// 	delay := baseDelay
+// 	for i := 0; i < attempts; i++ {
+// 		if err := fn(); err != nil {
+// 			time.Sleep(delay)
+// 			delay *= 2
+// 		} else {
+// 			return nil
+// 		}
+// 	}
+// 	return nil
+// }
+
+===== FILE: ./agent/collector/utils.go =====
+package collector
+
+import "time"
+
+// retrySend retries the provided function with exponential backoff
+func retrySend(attempts int, baseDelay time.Duration, fn func() error) error {
+	delay := baseDelay
+	for i := 0; i < attempts; i++ {
+		if err := fn(); err != nil {
+			time.Sleep(delay)
+			delay *= 2
+		} else {
+			return nil
+		}
+	}
+	return nil
+}
+
+===== FILE: ./agent/collector/host_logs.go =====
+package collector
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/sender"
+)
+
+func startFileCollector(
+	ctx context.Context,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
+) {
+
+	loadState()
+
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+
+	fmt.Println("📄 File log collector started:", src.Path)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+
+			file, err := os.Open(src.Path)
+			if err != nil {
+				fmt.Println("❌ File open error:", err)
+				continue
+			}
+
+			stat, err := file.Stat()
+			if err != nil {
+				file.Close()
+				continue
+			}
+
+			sysStat := stat.Sys().(*syscall.Stat_t)
+			inode := sysStat.Ino
+
+			state := fileStates[src.Path]
+
+			// Rotation detection
+			if state.Inode != inode {
+				fmt.Println("🔄 Log rotation detected:", src.Path)
+				state.Offset = 0
+				state.Inode = inode
+			}
+
+			// Truncation detection
+			if stat.Size() < state.Offset {
+				fmt.Println("⚠️ File truncated:", src.Path)
+				state.Offset = 0
+			}
+
+			_, err = file.Seek(state.Offset, io.SeekStart)
+			if err != nil {
+				file.Close()
+				continue
+			}
+
+			reader := bufio.NewReader(file)
+			var buffer strings.Builder
+			var entries []sender.LogEntry
+			newOffset := state.Offset
+
+			flush := func() {
+				if buffer.Len() == 0 {
+					return
+				}
+
+				fullLine := buffer.String()
+				ts, msg, _ := parseLogLine(fullLine)
+
+				if strings.TrimSpace(msg) == "" {
+					buffer.Reset()
+					return
+				}
+
+				entries = append(entries, sender.LogEntry{
+					AccountID: accountID,
+					AgentID:   agentID,
+					Hostname:  hostname,
+					Timestamp: ts,
+					Level:     "info",
+					Message:   strings.TrimSpace(msg),
+					Tags: map[string]string{
+						"source": src.Name,
+						"type":   "file",
+					},
+				})
+
+				buffer.Reset()
+			}
+
+			for {
+				line, err := reader.ReadString('\n')
+
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					break
+				}
+
+				newOffset += int64(len(line))
+				line = strings.TrimRight(line, "\n")
+
+				if isTimestampLine(line) {
+					flush()
+					buffer.WriteString(line)
+				} else {
+					if buffer.Len() > 0 {
+						buffer.WriteString("\n")
+					}
+					buffer.WriteString(line)
+				}
+
+				if len(entries) >= 1000 {
+					break
+				}
+			}
+
+			// Flush remaining multiline entry
+			flush()
+
+			file.Close()
+
+			if len(entries) == 0 {
+				continue
+			}
+
+			batch := sender.LogBatch{
+				AccountID: accountID,
+				AgentID:   agentID,
+				Hostname:  hostname,
+				Logs:      entries,
+			}
+
+			err = sender.SendLogs(serverURL, apiKey, batch)
+			if err != nil {
+				fmt.Println("❌ Send failed, keeping offset unchanged")
+				continue
+			}
+
+			// Update offset only after successful send
+			state.Offset = newOffset
+			fileStates[src.Path] = state
+			saveState()
+
+			// Backlog catch-up mode
+			backlog := stat.Size() - state.Offset
+			if backlog > 5*1024*1024 {
+				fmt.Println("⚡ Large backlog detected, reprocessing immediately")
+				continue
+			}
+		}
+	}
+}
+
+func startDirectoryCollector(
+	ctx context.Context,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
+) {
+
+	fmt.Println("📁 Directory log collector started:", src.Path)
+
+	ticker := time.NewTicker(10 * time.Second) // re-scan interval
+	defer ticker.Stop()
+
+	running := make(map[string]bool)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			files, err := os.ReadDir(src.Path)
+			if err != nil {
+				fmt.Println("❌ Directory read error:", err)
+				continue
+			}
+
+			for _, entry := range files {
+
+				if entry.IsDir() {
+					continue
+				}
+
+				fileName := entry.Name()
+				fullPath := filepath.Join(src.Path, fileName)
+
+				if !matchesInclude(fileName, src.Include) {
+					continue
+				}
+
+				if matchesExclude(fileName, src.Exclude) {
+					continue
+				}
+
+				if running[fullPath] {
+					continue
+				}
+
+				fmt.Println("📄 Starting collector for:", fullPath)
+
+				fileSrc := src
+				fileSrc.Path = fullPath
+				fileSrc.Name = src.Name + ":" + fileName
+
+				running[fullPath] = true
+
+				go startFileCollector(
+					ctx,
+					accountID,
+					agentID,
+					hostname,
+					fileSrc,
+					serverURL,
+					apiKey,
+					interval,
+				)
+			}
+		}
+	}
+}
+
+func matchesInclude(fileName string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+
+	for _, p := range patterns {
+		matched, _ := filepath.Match(p, fileName)
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesExclude(fileName string, patterns []string) bool {
+	for _, p := range patterns {
+		matched, _ := filepath.Match(p, fileName)
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func isTimestampLine(line string) bool {
+	if len(line) < 19 {
+		return false
+	}
+	_, err := time.Parse("2006-01-02 15:04:05", line[:19])
+	return err == nil
+}
+
+func startCommandCollector(
+	ctx context.Context,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
+) {
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+			out, err := exec.Command("sh", "-c", src.Command).Output()
+			if err != nil {
+				continue
+			}
+
+			lines := splitLines(string(out))
+			if len(lines) == 0 {
+				continue
+			}
+
+			var entries []sender.LogEntry
+			for _, l := range lines {
+				entries = append(entries, sender.LogEntry{
+					AccountID: accountID,
+					AgentID:   agentID,
+					Hostname:  hostname,
+					Timestamp: time.Now().Unix(),
+					Level:     "info",
+					Message:   l,
+					Tags: map[string]string{
+						"source": src.Name,
+						"type":   "command",
+					},
+				})
+			}
+
+			batch := sender.LogBatch{
+				AccountID: accountID,
+				AgentID:   agentID,
+				Hostname:  hostname,
+				Logs:      entries,
+			}
+
+			_ = sender.SendLogs(serverURL, apiKey, batch)
+		}
+	}
+}
+
+// -----------------------
+// Helpers
+// -----------------------
+
+func splitLines(content string) []string {
+	var out []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func parseLogLine(line string) (int64, string, error) {
+	if len(line) < 20 {
+		return time.Now().Unix(), line, nil
+	}
+
+	tsPart := line[:19]
+	msg := strings.TrimSpace(line[19:])
+
+	t, err := time.Parse("2006-01-02 15:04:05", tsPart)
+	if err != nil {
+		return time.Now().Unix(), line, nil
+	}
+
+	return t.Unix(), msg, nil
+}
+
+===== FILE: ./agent/collector/log_source.go =====
+package collector
+
+import (
+	"context"
+	"fmt"
+
+	"opslense-pulse/agent/config"
+)
+
+func StartLogSource(
+	ctx context.Context,
+	accountID, agentID, hostname string,
+	src config.LogSource,
+	serverURL, apiKey string,
+	interval int,
+) {
+	fmt.Println("📦 Starting log source:", src.Name, "type:", src.Type)
+
+	switch src.Type {
+	case "file":
+		startFileCollector(
+			ctx,
+			accountID,
+			agentID,
+			hostname,
+			src,
+			serverURL,
+			apiKey,
+			interval,
+		)
+
+	case "directory":
+		startDirectoryCollector(
+			ctx,
+			accountID,
+			agentID,
+			hostname,
+			src,
+			serverURL,
+			apiKey,
+			interval,
+		)
+
+	case "command":
+		startCommandCollector(
+			ctx,
+			accountID,
+			agentID,
+			hostname,
+			src,
+			serverURL,
+			apiKey,
+			interval,
+		)
+
+	default:
+		fmt.Println("⚠️ Unknown log source type:", src.Type)
+	}
+}
+
+===== FILE: ./agent/collector/base.go =====
+// collector/base.go
+package collector
+
+import "runtime"
+
+var BaseDir string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		BaseDir = `C:\ProgramData\OpsLens-Pulse`
+	} else {
+		BaseDir = "/var/lib/opslens-pulse"
+	}
+}
+
+===== FILE: ./agent/collector/container_logs.go =====
+package collector
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+var (
+	containerLastLine     = make(map[string]int)
+	containerLastLineFile = filepath.Join(BaseDir, "container_last_line.json")
+	containerLastLineLock = &sync.Mutex{}
+)
+
+// loadLastLines loads last read positions
+func loadLastLines() {
+	data, err := os.ReadFile(containerLastLineFile)
+	if err != nil {
+		return
+	}
+	containerLastLineLock.Lock()
+	defer containerLastLineLock.Unlock()
+	_ = json.Unmarshal(data, &containerLastLine)
+}
+
+// saveLastLines persists positions
+func saveLastLines() {
+	containerLastLineLock.Lock()
+	defer containerLastLineLock.Unlock()
+
+	data, err := json.Marshal(containerLastLine)
+	if err != nil {
+		log.Println("Error marshaling container log cursor:", err)
+		return
+	}
+
+	if err := os.WriteFile(containerLastLineFile, data, 0644); err != nil {
+		log.Println("Error writing container log cursor:", err)
+	}
+}
+
+// StartContainerLogsCollector collects logs from Docker containers
+func StartContainerLogsCollector(
+	ctx context.Context,
+	agentID, accountID, hostname, serverURL, apiKey string,
+	intervalSeconds int,
+) {
+	loadLastLines()
+
+	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("📦 Container logs collector stopped")
+			saveLastLines()
+			return
+
+		case <-ticker.C:
+			list, err := containers.ListRunning()
+			if err != nil {
+				log.Println("Error listing containers:", err)
+				continue
+			}
+
+			for _, c := range list {
+				lines, err := containers.GetContainerLogs(c.ID, 100)
+				if err != nil || len(lines) == 0 {
+					continue
+				}
+
+				containerLastLineLock.Lock()
+				last := containerLastLine[c.ID]
+				containerLastLineLock.Unlock()
+
+				if last >= len(lines) {
+					continue
+				}
+
+				newLines := lines[last:]
+				// Extract container name safely
+				name := ""
+				if len(c.Names) > 0 {
+					name = strings.TrimPrefix(c.Names[0], "/")
+				}
+
+				// Build entries using root shared.ContainerLog
+				var entries []shared.ContainerLog
+				for _, line := range newLines {
+					entries = append(entries, shared.ContainerLog{
+						AccountID:     accountID,
+						AgentID:       agentID,
+						Hostname:      hostname,
+						ContainerID:   c.ID,
+						ContainerName: name,
+						Timestamp:     time.Now().Unix(),
+						Message:       line,
+						Level:         "info", // default level
+					})
+				}
+
+				if len(entries) == 0 {
+					continue
+				}
+
+				batch := shared.ContainerLogBatch{
+					AccountID: accountID,
+					AgentID:   agentID,
+					Hostname:  hostname,
+					Logs:      entries,
+				}
+
+				if err := retrySend(3, 2*time.Second, func() error {
+					return sender.SendContainerLogs(serverURL, apiKey, batch)
+				}); err != nil {
+					log.Println("Container logs send failed:", err)
+					continue
+				}
+
+				containerLastLineLock.Lock()
+				containerLastLine[c.ID] = len(lines)
+				containerLastLineLock.Unlock()
+
+				saveLastLines()
+			}
+		}
+	}
+}
+
+===== FILE: ./agent/collector/file_state.go =====
+package collector
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync"
+)
+
+type FileState struct {
+	Inode  uint64 `json:"inode"`
+	Offset int64  `json:"offset"`
+}
+
+var (
+	stateFilePath = "/var/lib/opslens/state.json"
+	stateMu       sync.Mutex
+	fileStates    = make(map[string]FileState)
+)
+
+func loadState() {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	data, err := os.ReadFile(stateFilePath)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, &fileStates)
+}
+
+func saveState() {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	_ = os.MkdirAll(filepath.Dir(stateFilePath), 0755)
+	data, _ := json.MarshalIndent(fileStates, "", "  ")
+
+	tmpPath := stateFilePath + ".tmp"
+
+	// Write to temp file first
+
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return
+	}
+
+	// Atomic rename
+	_ = os.Rename(tmpPath, stateFilePath)
+}
+
+===== FILE: ./agent/heartbeat/heartbeat.go =====
+package heartbeat
+
+import (
+	"time"
+
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+type Heartbeat struct {
+	AccountID string    `json:"account_id"`
+	AgentID   string    `json:"agent_id"`
+	Hostname  string    `json:"hostname"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Send sends a heartbeat to server
+func Send(serverURL, token, accountID, agentID, hostname string) error {
+	hb := shared.Heartbeat{
+		AccountID: accountID,
+		AgentID:   agentID,
+		Hostname:  hostname,
+		Timestamp: time.Now(),
+	}
+
+	return sender.SendHeartbeat(serverURL, token, hb)
+}
+
+===== FILE: ./agent/logs/logs.go =====
+package logs
+
+import (
+	"bufio"
+	"os"
+	"strings"
+)
+
+func ReadLastLines(path string, n int) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var lines []string
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n"), scanner.Err()
+}
+
+===== FILE: ./agent/containers/docker.go =====
+package containers
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
+)
+
+type RawContainerMetrics struct {
+	ID         string
+	Name       string
+	Image      string
+	Status     string
+	CPU        float64
+	MemUsedMB  uint64
+	MemLimitMB uint64
+	Timestamp  time.Time
+}
+
+func ListRunning() ([]types.Container, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+
+	return cli.ContainerList(context.Background(), types.ContainerListOptions{})
+}
+
+func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return RawContainerMetrics{}, err
+	}
+	defer cli.Close()
+
+	stats, err := cli.ContainerStatsOneShot(context.Background(), c.ID)
+	if err != nil {
+		return RawContainerMetrics{}, err
+	}
+	defer stats.Body.Close()
+
+	var s types.StatsJSON
+	if err := json.NewDecoder(stats.Body).Decode(&s); err != nil {
+		return RawContainerMetrics{}, err
+	}
+
+	cpuDelta := float64(s.CPUStats.CPUUsage.TotalUsage - s.PreCPUStats.CPUUsage.TotalUsage)
+	sysDelta := float64(s.CPUStats.SystemUsage - s.PreCPUStats.SystemUsage)
+
+	cpuPercent := 0.0
+	if cpuDelta > 0 && sysDelta > 0 {
+		cpuPercent = (cpuDelta / sysDelta) * float64(len(s.CPUStats.CPUUsage.PercpuUsage)) * 100
+	}
+	name := ""
+	if len(c.Names) > 0 {
+		name = strings.TrimPrefix(c.Names[0], "/")
+	}
+	return RawContainerMetrics{
+		ID:         c.ID,
+		Name:       name,
+		Image:      c.Image,
+		Status:     c.State,
+		CPU:        cpuPercent,
+		MemUsedMB:  s.MemoryStats.Usage / 1024 / 1024,
+		MemLimitMB: s.MemoryStats.Limit / 1024 / 1024,
+		Timestamp:  time.Now(),
+	}, nil
+}
+
+func GetContainerLogs(containerID string, tail int) ([]string, error) {
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+
+	options := types.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+		Tail:       "100",
+	}
+
+	reader, err := cli.ContainerLogs(context.Background(), containerID, options)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	// Split into lines
+	lines := strings.Split(string(data), "\n")
+	return lines, nil
+}
+
+===== FILE: ./agent/containers/convert.go =====
+package containers
+
+import (
+	"opslense-pulse/shared"
+)
+
+func ToSharedMetrics(
+	raw RawContainerMetrics,
+	accountID, agentID, hostname string,
+) shared.ContainerMetrics {
+
+	return shared.ContainerMetrics{
+		AccountID:     accountID,
+		AgentID:       agentID,
+		Hostname:      hostname,
+		ContainerID:   raw.ID,
+		ContainerName: raw.Name,
+		Image:         raw.Image,
+		Status:        raw.Status,
+		CPUPercent:    float32(raw.CPU),
+		MemTotalMB:    float32(raw.MemLimitMB),
+		MemUsedMB:     float32(raw.MemUsedMB),
+		Timestamp:     raw.Timestamp.Unix(),
+	}
+}
+
+===== FILE: ./agent/main.go =====
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
+	"time"
+
+	"opslense-pulse/agent/collector"
+	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/heartbeat"
+	"opslense-pulse/agent/identity"
+	"opslense-pulse/agent/metrics"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+const AgentVersion = "1.0.0"
+
+func printHelp() {
+	fmt.Print(`
+OpsLens-Pulse Agent
+
+Usage:
+  opslens-pulse-agent [options]
+
+Options:
+  --config <path>     Path to YAML config file
+  --version           Show version
+  --help              Show help
+
+Defaults:
+  Linux:   /etc/opslens-pulse/agent-config.yaml
+  Windows: C:\ProgramData\OpsLens-Pulse\agent-config.yaml
+
+Env:
+  OPS_AGENT_CONFIG
+`)
+}
+
+func getLocalIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+			return ip.String()
+		}
+	}
+	return ""
+}
+
+func defaultLogSources() []config.LogSource {
+	if runtime.GOOS == "windows" {
+		return []config.LogSource{
+			{
+				Name: "agent-self",
+				Type: "file",
+				Path: `C:\ProgramData\OpsLens-Pulse\agent.log`,
+			},
+		}
+	}
+
+	return []config.LogSource{
+		{
+			Name: "agent-self",
+			Type: "file",
+			Path: "/var/log/opslens-pulse/agent.log",
+		},
+		{
+			Name: "system-syslog",
+			Type: "file",
+			Path: "/var/log/syslog",
+		},
+	}
+}
+
+func main() {
+	shared.InitLogger("agent")
+	log.Println("🚀 OpsLens-Pulse Agent starting...")
+
+	// Parse flags
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Config path")
+	showHelp := flag.Bool("help", false, "Help")
+	showVersion := flag.Bool("version", false, "Version")
+	flag.Parse()
+
+	if *showHelp {
+		printHelp()
+		return
+	}
+	if *showVersion {
+		fmt.Println(AgentVersion)
+		return
+	}
+
+	// Load config
+	cfg, path, created, err := config.LoadOrCreateConfig(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("📄 Agent config created at: %s\n", path)
+	} else {
+		log.Printf("📄 Agent config loaded from: %s\n", path)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
+	}
+
+	// Agent ID
+	agentID, err := identity.LoadOrCreateAgentID()
+	if err != nil {
+		log.Fatal("Failed to load/create agent ID:", err)
+	}
+	log.Printf("🆔 Agent ID: %s\n", agentID)
+
+	hostname, _ := os.Hostname()
+	serverURL := cfg.Server.URL
+	apiKey := cfg.Server.APIKey
+	accountID := cfg.AccountID // <--- configurable accountID
+
+	if serverURL == "" || apiKey == "" {
+		log.Fatal("🌐 server.url and 🔐 server.api_key must be set in agent config")
+	}
+
+	logSources := cfg.Agent.Logs
+	if len(logSources) == 0 {
+		log.Println("⚠️ No log sources configured, using defaults")
+		logSources = defaultLogSources()
+	}
+
+	logInterval := cfg.Agent.LogCollectionIntervalSeconds
+	if logInterval <= 0 {
+		logInterval = 10
+	}
+
+	// Context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Capture termination signals
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start host log collector
+	for _, src := range logSources {
+		go collector.StartLogSource(
+			ctx,
+			cfg.AccountID,
+			agentID,
+			hostname,
+			src,
+			serverURL,
+			apiKey,
+			cfg.Agent.LogCollectionIntervalSeconds,
+		)
+	}
+
+	// Docker detection
+	dockerAvailable := false
+	if _, err := containers.ListRunning(); err == nil {
+		dockerAvailable = true
+	}
+
+	if dockerAvailable {
+		log.Println("🐳 Docker detected: starting container collectors...")
+
+		go collector.StartContainerMetricsCollector(ctx, agentID, accountID, hostname, serverURL, apiKey, 10)
+		go collector.StartContainerLogsCollector(ctx, agentID, accountID, hostname, serverURL, apiKey, 10)
+	}
+
+	// Main metrics + heartbeat loop
+	ticker := time.NewTicker(time.Duration(cfg.Agent.IntervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Agent shutting down gracefully...")
+			return
+		case <-sig:
+			cancel()
+		case <-ticker.C:
+			start := time.Now()
+
+			// Collect host metrics
+			memTotal, memUsed := metrics.Memory()
+			osName, uptime := metrics.HostInfo()
+
+			m := shared.HostMetrics{
+				AccountID:  cfg.AccountID,
+				AgentID:    agentID,
+				Hostname:   hostname,
+				OS:         osName,
+				Version:    AgentVersion,
+				Timestamp:  time.Now().Unix(),
+				Cores:      runtime.NumCPU(),
+				MemTotalMB: float32(memTotal),
+				MemUsedMB:  float32(memUsed),
+				UptimeSec:  uptime,
+				CPUPercent: float32(metrics.CPUPercent()),
+				Tags:       cfg.Tags,
+				IP:         getLocalIP(),
+			}
+
+			// Send host metrics with retry
+			go func() {
+				if err := retrySend(3, 2*time.Second, func() error {
+					return sender.Send(serverURL, apiKey, m)
+				}); err != nil {
+					log.Println("Metrics send failed:", err)
+				}
+			}()
+
+			// Send heartbeat with retry
+			go func() {
+				if err := retrySend(3, 2*time.Second, func() error {
+					return heartbeat.Send(serverURL, apiKey, accountID, agentID, hostname)
+				}); err != nil {
+					log.Println("Heartbeat send failed:", err)
+				}
+			}()
+
+			// Correct sleep to avoid drift
+			elapsed := time.Since(start)
+			sleep := time.Duration(cfg.Agent.IntervalSeconds)*time.Second - elapsed
+			if sleep > 0 {
+				time.Sleep(sleep)
+			}
+		}
+	}
+}
+
+// retrySend retries the provided function with exponential backoff
+func retrySend(attempts int, baseDelay time.Duration, fn func() error) error {
+	delay := baseDelay
+	for i := 0; i < attempts; i++ {
+		if err := fn(); err != nil {
+			time.Sleep(delay)
+			delay *= 2
+		} else {
+			return nil
+		}
+	}
+	return fmt.Errorf("all retries failed")
+}
+
+===== FILE: ./shared/logger.go =====
+package shared
+
+import (
+	"log"
+	"os"
+)
+
+var Logger *log.Logger
+
+// InitLogger initializes a global logger
+func InitLogger(prefix string) {
+	Logger = log.New(os.Stdout, "["+prefix+"] ", log.LstdFlags|log.Lshortfile)
+}
+
+===== FILE: ./shared/model.go =====
+package shared
+
+import "time"
+
+// -------------------------------
+// HostMetrics: metrics sent by an agent
+// -------------------------------
+type HostMetrics struct {
+	AccountID    string            `json:"account_id"` // multi-tenant
+	AgentID      string            `json:"agent_id"`   // unique agent id
+	Hostname     string            `json:"hostname"`   // host name
+	OS           string            `json:"os"`         // add this
+	IP           string            `json:"ip"`
+	Version      string            `json:"version"`
+	Cores        int               `json:"cores"`
+	CPUPercent   float32           `json:"cpu_percent"`    // CPU usage %
+	MemUsedMB    float32           `json:"mem_used_mb"`    // Memory used in MB
+	MemTotalMB   float32           `json:"mem_total_mb"`   // Total memory in MB
+	DiskUsedMB   float32           `json:"disk_used_mb"`   // Disk used in MB
+	DiskTotalMB  float32           `json:"disk_total_mb"`  // Disk total in MB
+	NetworkInMB  float32           `json:"network_in_mb"`  // Network received in MB
+	NetworkOutMB float32           `json:"network_out_mb"` // Network sent in MB
+	UptimeSec    uint64            `json:"uptime_sec"`     // Uptime in seconds
+	Tags         map[string]string `json:"tags"`           // key-value tags
+	TTLDays      uint16            `json:"ttl_days"`       // TTL in days (optional)
+	Timestamp    int64             `json:"timestamp"`      // optional: epoch seconds, default now
+}
+
+// -------------------------------
+// LogEntry: individual log from agent
+// -------------------------------
+type LogEntry struct {
+	AccountID string            `json:"account_id"` // multi-tenant
+	AgentID   string            `json:"agent_id"`
+	Hostname  string            `json:"hostname"`
+	Timestamp int64             `json:"timestamp"` // epoch seconds
+	Level     string            `json:"level"`     // info, warn, error
+	Message   string            `json:"message"`
+	Tags      map[string]string `json:"tags"`                 // optional tags
+	TTLDays   uint16            `json:"ttl_days"`             // optional TTL
+	HumanTime string            `json:"human_time,omitempty"` // formatted string for UI
+}
+
+// -------------------------------
+// LogBatch: batch of logs sent by agent
+// -------------------------------
+type LogBatch struct {
+	AccountID string     `json:"account_id"`
+	AgentID   string     `json:"agent_id"`
+	Hostname  string     `json:"hostname"`
+	Logs      []LogEntry `json:"logs"`
+}
+
+// -------------------------------
+// APIKey: API key info
+// -------------------------------
+type APIKey struct {
+	AccountID   string `json:"account_id"`
+	KeyID       string `json:"key_id"`
+	KeyHash     string `json:"key_hash"`
+	Name        string `json:"name"`
+	IsActive    uint8  `json:"is_active"`    // 1 = active, 0 = inactive
+	IsBootstrap uint8  `json:"is_bootstrap"` // 1 = bootstrap key
+	CreatedAt   time.Time
+}
+
+// -------------------------------
+// AgentInfo: for agent metadata & heartbeat
+// -------------------------------
+type AgentInfo struct {
+	AccountID   string            `json:"account_id"`
+	AgentID     string            `json:"agent_id"`
+	Hostname    string            `json:"hostname"`
+	IP          string            `json:"ip"`
+	OS          string            `json:"os"`
+	Version     string            `json:"version"`
+	Environment string            `json:"environment"`
+	Tags        map[string]string `json:"tags"`
+	FirstSeen   time.Time         `json:"first_seen"`
+	LastSeen    time.Time         `json:"last_seen"`
+	Alive       bool              `json:"alive"`
+}
+
+// -------------------------------
+// Heartbeat struct (optional for API)
+// -------------------------------
+type Heartbeat struct {
+	AccountID string    `json:"account_id"`
+	AgentID   string    `json:"agent_id"`
+	Hostname  string    `json:"hostname"`
+	Timestamp time.Time `json:"timestamp"` // epoch seconds
+}
+
+type ContainerMetrics struct {
+	AccountID     string            `json:"account_id"`
+	AgentID       string            `json:"agent_id"`
+	Hostname      string            `json:"hostname"`
+	Image         string            `json:"image"`
+	Status        string            `json:"status"`
+	ContainerID   string            `json:"container_id"`
+	ContainerName string            `json:"container_name"`
+	CPUPercent    float32           `json:"cpu_percent"`
+	MemUsedMB     float32           `json:"mem_used_mb"`
+	MemTotalMB    float32           `json:"mem_total_mb"`
+	DiskUsedMB    float32           `json:"disk_used_mb"`
+	DiskTotalMB   float32           `json:"disk_total_mb"`
+	NetworkInMB   float32           `json:"network_in_mb"`
+	NetworkOutMB  float32           `json:"network_out_mb"`
+	Tags          map[string]string `json:"tags"`
+	Timestamp     int64             `json:"timestamp,omitempty"`
+	TTLDays       uint16            `json:"ttl_days,omitempty"`
+}
+
+type ContainerLog struct {
+	AccountID     string            `json:"account_id"`
+	AgentID       string            `json:"agent_id"`
+	Hostname      string            `json:"hostname"`
+	ContainerID   string            `json:"container_id"`
+	ContainerName string            `json:"container_name"`
+	Level         string            `json:"level"`
+	Message       string            `json:"message"`
+	Tags          map[string]string `json:"tags"`
+	Timestamp     int64             `json:"timestamp,omitempty"`
+	TTLDays       uint16            `json:"ttl_days,omitempty"`
+}
+
+type ContainerLogBatch struct {
+	AccountID string         `json:"account_id"`
+	AgentID   string         `json:"agent_id"`
+	Hostname  string         `json:"hostname"`
+	Logs      []ContainerLog `json:"logs"`
+}
+
+type ContainerLogEntry struct {
+	AccountID   string `json:"account_id"`
+	AgentID     string `json:"agent_id"`
+	Hostname    string `json:"hostname"`
+	ContainerID string `json:"container_id"`
+	Timestamp   int64  `json:"timestamp"`
+	Message     string `json:"message"`
+}
+
+===== FILE: ./docker-compose.agent.yml =====
+services:
+
+  loggen:
+    image: python:3.11-slim
+    container_name: loggen
+    hostname: loggen
+    working_dir: /logs
+    networks:
+      - opslens-net
+    volumes:
+      - ./logs:/logs  # host folder ./logs mounted to /logs in container
+    command: >
+      bash -c "while true; do
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random log message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random String message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random Number message\" >> /logs/random.log;
+        sleep 1;
+      done"
+  agent:
+    image: golang:1.25.6
+    container_name: opslens-agent
+    hostname: opslens-agent
+    working_dir: /app
+    networks:
+      - opslens-net
+    volumes:
+      - ./:/app
+      - ./agent-config1.yaml:/etc/opslens-pulse/agent-config.yaml
+      - ./logs:/logs
+      - ./agent-data:/var/lib/opslens
+    command: go run agent/main.go
+
+  # agent2:
+  #   image: golang:1.24
+  #   container_name: opslens-agent2
+  #   hostname: opslens-agent2
+  #   working_dir: /app
+  #   networks:
+  #     - opslens-net
+  #   volumes:
+  #     - ./:/app
+  #     - ./agent-config2.yaml:/etc/opslens-pulse/agent-config.yaml
+  #   command: go run agent/main.go
+
+networks:
+  opslens-net:
+    external: true
+
+===== FILE: ./.github/workflows/release.yml =====
+name: Build & Release OpsLens Pulse
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.0.0)"
+        required: true
+        default: "v0.1.0"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # required for GitHub Releases
+
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev
+
+      - name: Run release script
+        run: |
+          chmod +x release.sh
+          ./release.sh "$VERSION"
+
+      # 🔍 VERY IMPORTANT: verify what will be uploaded
+      - name: Debug release artifacts
+        run: |
+          echo "==== package/dist/releases ===="
+          ls -lah package/dist/releases
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: OpsLens Pulse ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            package/dist/releases/*
+
+===== FILE: ./docker-compose.server.yml =====
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: opslens-clickhouse
+    networks:
+      - opslens-net
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DB=opslens
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    image: golang:1.25.6
+    container_name: opslens-server
+    working_dir: /app
+    networks:
+      - opslens-net
+    ports:
+      - "9898:9898"
+    volumes:
+      - ./:/app
+      - ./server-config.yaml:/etc/opslens-pulse/server-config.yaml
+    command: go run server/main.go
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=9000
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DATABASE=opslens
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+
+networks:
+  opslens-net:
+    external: true
+
+volumes:
+  clickhouse-data:
+

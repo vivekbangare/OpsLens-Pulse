@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -184,20 +185,33 @@ func main() {
 	}
 
 	// -------------------------------
-	// Serve static files
+	// Serve React (Vite production build)
 	// -------------------------------
-	fs := http.FileServer(http.Dir("./server/ui/static"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	// Serve HTML
+	uiPath := "./ui/dist"
+
+	// Serve static assets directly
+	http.Handle("/assets/",
+		http.StripPrefix("/assets/",
+			http.FileServer(http.Dir(filepath.Join(uiPath, "assets"))),
+		),
+	)
+
+	// Serve favicon / vite.svg if needed
+	http.Handle("/vite.svg",
+		http.FileServer(http.Dir(uiPath)),
+	)
+
+	// SPA fallback for everything else (but not /api)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
-		} else if !strings.HasSuffix(path, ".html") {
-			path += ".html"
+
+		// If this is an API route, let registered handlers process it
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
 		}
-		http.ServeFile(w, r, "./server/ui/static"+path)
+
+		http.ServeFile(w, r, filepath.Join(uiPath, "index.html"))
 	})
 
 	// -------------------------------
