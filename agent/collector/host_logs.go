@@ -1,15 +1,18 @@
 package collector
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"opslense-pulse/agent/config"
-	"opslense-pulse/agent/logs"
 	"opslense-pulse/agent/sender"
 )
 
@@ -20,6 +23,9 @@ func startFileCollector(
 	serverURL, apiKey string,
 	interval int,
 ) {
+
+	loadState()
+
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
@@ -31,22 +37,59 @@ func startFileCollector(
 			return
 
 		case <-ticker.C:
-			content, err := logs.ReadLastLines(src.Path, 50)
+
+			file, err := os.Open(src.Path)
 			if err != nil {
-				fmt.Println("❌ Read error:", err)
+				fmt.Println("❌ File open error:", err)
 				continue
 			}
 
-			lines := splitLines(content)
-			if len(lines) == 0 {
+			stat, err := file.Stat()
+			if err != nil {
+				file.Close()
 				continue
 			}
 
+			sysStat := stat.Sys().(*syscall.Stat_t)
+			inode := sysStat.Ino
+
+			state := fileStates[src.Path]
+
+			// Rotation detection
+			if state.Inode != inode {
+				fmt.Println("🔄 Log rotation detected:", src.Path)
+				state.Offset = 0
+				state.Inode = inode
+			}
+
+			// Truncation detection
+			if stat.Size() < state.Offset {
+				fmt.Println("⚠️ File truncated:", src.Path)
+				state.Offset = 0
+			}
+
+			_, err = file.Seek(state.Offset, io.SeekStart)
+			if err != nil {
+				file.Close()
+				continue
+			}
+
+			reader := bufio.NewReader(file)
+			var buffer strings.Builder
 			var entries []sender.LogEntry
-			for _, line := range lines {
-				ts, msg, _ := parseLogLine(line)
-				if msg == "" {
-					continue
+			newOffset := state.Offset
+
+			flush := func() {
+				if buffer.Len() == 0 {
+					return
+				}
+
+				fullLine := buffer.String()
+				ts, msg, _ := parseLogLine(fullLine)
+
+				if strings.TrimSpace(msg) == "" {
+					buffer.Reset()
+					return
 				}
 
 				entries = append(entries, sender.LogEntry{
@@ -55,13 +98,48 @@ func startFileCollector(
 					Hostname:  hostname,
 					Timestamp: ts,
 					Level:     "info",
-					Message:   msg,
+					Message:   strings.TrimSpace(msg),
 					Tags: map[string]string{
 						"source": src.Name,
 						"type":   "file",
 					},
 				})
+
+				buffer.Reset()
 			}
+
+			for {
+				line, err := reader.ReadString('\n')
+
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					break
+				}
+
+				newOffset += int64(len(line))
+				line = strings.TrimRight(line, "\n")
+
+				if isTimestampLine(line) {
+					flush()
+					buffer.WriteString(line)
+				} else {
+					if buffer.Len() > 0 {
+						buffer.WriteString("\n")
+					}
+					buffer.WriteString(line)
+				}
+
+				if len(entries) >= 1000 {
+					break
+				}
+			}
+
+			// Flush remaining multiline entry
+			flush()
+
+			file.Close()
 
 			if len(entries) == 0 {
 				continue
@@ -74,9 +152,23 @@ func startFileCollector(
 				Logs:      entries,
 			}
 
-			_ = retrySend(3, 2*time.Second, func() error {
-				return sender.SendLogs(serverURL, apiKey, batch)
-			})
+			err = sender.SendLogs(serverURL, apiKey, batch)
+			if err != nil {
+				fmt.Println("❌ Send failed, keeping offset unchanged")
+				continue
+			}
+
+			// Update offset only after successful send
+			state.Offset = newOffset
+			fileStates[src.Path] = state
+			saveState()
+
+			// Backlog catch-up mode
+			backlog := stat.Size() - state.Offset
+			if backlog > 5*1024*1024 {
+				fmt.Println("⚡ Large backlog detected, reprocessing immediately")
+				continue
+			}
 		}
 	}
 }
@@ -88,24 +180,99 @@ func startDirectoryCollector(
 	serverURL, apiKey string,
 	interval int,
 ) {
-	files, _ := filepath.Glob(filepath.Join(src.Path, "*"))
 
-	for _, f := range files {
-		fileSrc := src
-		fileSrc.Path = f
-		fileSrc.Name = src.Name + ":" + filepath.Base(f)
+	fmt.Println("📁 Directory log collector started:", src.Path)
 
-		go startFileCollector(
-			ctx,
-			accountID,
-			agentID,
-			hostname,
-			fileSrc,
-			serverURL,
-			apiKey,
-			interval,
-		)
+	ticker := time.NewTicker(10 * time.Second) // re-scan interval
+	defer ticker.Stop()
+
+	running := make(map[string]bool)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			files, err := os.ReadDir(src.Path)
+			if err != nil {
+				fmt.Println("❌ Directory read error:", err)
+				continue
+			}
+
+			for _, entry := range files {
+
+				if entry.IsDir() {
+					continue
+				}
+
+				fileName := entry.Name()
+				fullPath := filepath.Join(src.Path, fileName)
+
+				if !matchesInclude(fileName, src.Include) {
+					continue
+				}
+
+				if matchesExclude(fileName, src.Exclude) {
+					continue
+				}
+
+				if running[fullPath] {
+					continue
+				}
+
+				fmt.Println("📄 Starting collector for:", fullPath)
+
+				fileSrc := src
+				fileSrc.Path = fullPath
+				fileSrc.Name = src.Name + ":" + fileName
+
+				running[fullPath] = true
+
+				go startFileCollector(
+					ctx,
+					accountID,
+					agentID,
+					hostname,
+					fileSrc,
+					serverURL,
+					apiKey,
+					interval,
+				)
+			}
+		}
 	}
+}
+
+func matchesInclude(fileName string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+
+	for _, p := range patterns {
+		matched, _ := filepath.Match(p, fileName)
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesExclude(fileName string, patterns []string) bool {
+	for _, p := range patterns {
+		matched, _ := filepath.Match(p, fileName)
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func isTimestampLine(line string) bool {
+	if len(line) < 19 {
+		return false
+	}
+	_, err := time.Parse("2006-01-02 15:04:05", line[:19])
+	return err == nil
 }
 
 func startCommandCollector(
@@ -178,7 +345,6 @@ func splitLines(content string) []string {
 }
 
 func parseLogLine(line string) (int64, string, error) {
-	// Expected: "YYYY-MM-DD HH:MM:SS message"
 	if len(line) < 20 {
 		return time.Now().Unix(), line, nil
 	}

@@ -430,13 +430,13 @@ func (c *ClickHouseStore) InsertLogs(batch shared.LogBatch) error {
 
 	for _, l := range batch.Logs {
 		ts := time.Now()
-		// if l.Timestamp > 0 {
-		// 	if l.Timestamp > 1e12 {
-		// 		ts = time.UnixMilli(l.Timestamp)
-		// 	} else {
-		// 		ts = time.Unix(l.Timestamp, 0)
-		// 	}
-		// }
+		if l.Timestamp > 0 {
+			if l.Timestamp > 1e12 {
+				ts = time.UnixMilli(l.Timestamp)
+			} else {
+				ts = time.Unix(l.Timestamp, 0)
+			}
+		}
 
 		level := l.Level
 		if level == "" {

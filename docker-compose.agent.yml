@@ -27,6 +27,7 @@ services:
       - ./:/app
       - ./agent-config1.yaml:/etc/opslens-pulse/agent-config.yaml
       - ./logs:/logs
+      - ./agent-data:/var/lib/opslens
     command: go run agent/main.go
 
   # agent2:

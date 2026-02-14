@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS logs
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(ingested_at)
-ORDER BY (account_id, agent_id, ingested_at)
+ORDER BY (account_id, agent_id, timestamp)
 TTL timestamp + toIntervalDay(ttl_days);
 
 -- =========================================================
