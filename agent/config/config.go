@@ -32,10 +32,9 @@ type AgentConfig struct {
 }
 
 type Config struct {
-	Server    ServerConfig      `yaml:"server"`
-	Agent     AgentConfig       `yaml:"agent"`
-	Tags      map[string]string `yaml:"tags"`
-	AccountID string            `yaml:"account_id"`
+	Server ServerConfig      `yaml:"server"`
+	Agent  AgentConfig       `yaml:"agent"`
+	Tags   map[string]string `yaml:"tags"`
 }
 
 var DefaultPath string
@@ -152,7 +151,6 @@ func defaultConfig() Config {
 		Tags: map[string]string{
 			"env": "dev",
 		},
-		AccountID: "default",
 	}
 }
 

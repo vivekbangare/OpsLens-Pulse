@@ -36,10 +36,6 @@ func LoadClickHouse() ClickHouseConfig {
 	return cfg
 }
 
-//	func (c ClickHouseConfig) DSN() string {
-//		return fmt.Sprintf("tcp://%s:%d?username=%s&password=%s&database=%s",
-//			c.Host, c.Port, c.User, c.Password, c.Database)
-//	}
 func (c ClickHouseConfig) DSN() string {
 	if c.Database == "" {
 		c.Database = "default"

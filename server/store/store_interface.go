@@ -13,13 +13,12 @@ type Store interface {
 	InsertContainerLogs(batch shared.ContainerLogBatch) error
 	UpsertAgentHeartbeat(hb shared.Heartbeat) error
 	UpsertAgentMetadata(m shared.HostMetrics) error
-	ListAgents(accountID string) ([]shared.AgentInfo, error)
-	GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error)
-	GetLogSources(accountID, agentID string) ([]string, error)
 
 	// Query
+	ListAgents(tenantID string) ([]shared.AgentInfo, error)
+	GetLatestHostMetrics(tenantID string) (map[string]shared.HostMetrics, error)
 	GetLogs(
-		accountID string,
+		tenantID string,
 		hostname string,
 		agentID string,
 		from, to time.Time,
@@ -27,9 +26,5 @@ type Store interface {
 		source string,
 		limit int,
 	) ([]shared.LogEntry, error)
-
-	// API keys
-	InsertAPIKey(k shared.APIKey) error
-	ValidateAPIKey(rawKey string) (bool, error)
-	CountAPIKeys() (int, error)
+	GetLogSources(tenantID, agentID string) ([]string, error)
 }

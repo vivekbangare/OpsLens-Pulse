@@ -4,17 +4,20 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
 )
 
 func HostsHandler(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		accountID := r.URL.Query().Get("account_id")
-		if accountID == "" {
-			accountID = "default"
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+
+		if !ok || tenantID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 
-		agents, err := st.ListAgents(accountID)
+		agents, err := st.ListAgents(tenantID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -26,12 +29,14 @@ func HostsHandler(st store.Store) http.HandlerFunc {
 
 func HostSummaryHandler(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		accountID := r.URL.Query().Get("account_id")
-		if accountID == "" {
-			accountID = "default"
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+
+		if !ok || tenantID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 
-		data, err := st.GetLatestHostMetrics(accountID)
+		data, err := st.GetLatestHostMetrics(tenantID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

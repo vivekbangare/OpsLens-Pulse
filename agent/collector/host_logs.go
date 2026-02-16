@@ -18,14 +18,13 @@ import (
 
 func startFileCollector(
 	ctx context.Context,
-	accountID, agentID, hostname string,
+	agentID, hostname string,
 	src config.LogSource,
 	serverURL, apiKey string,
 	interval int,
 ) {
 
 	loadState()
-
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
@@ -52,9 +51,9 @@ func startFileCollector(
 
 			sysStat := stat.Sys().(*syscall.Stat_t)
 			inode := sysStat.Ino
-
+			stateMu.Lock()
 			state := fileStates[src.Path]
-
+			stateMu.Unlock()
 			// Rotation detection
 			if state.Inode != inode {
 				fmt.Println("🔄 Log rotation detected:", src.Path)
@@ -93,7 +92,6 @@ func startFileCollector(
 				}
 
 				entries = append(entries, sender.LogEntry{
-					AccountID: accountID,
 					AgentID:   agentID,
 					Hostname:  hostname,
 					Timestamp: ts,
@@ -146,10 +144,9 @@ func startFileCollector(
 			}
 
 			batch := sender.LogBatch{
-				AccountID: accountID,
-				AgentID:   agentID,
-				Hostname:  hostname,
-				Logs:      entries,
+				AgentID:  agentID,
+				Hostname: hostname,
+				Logs:     entries,
 			}
 
 			err = sender.SendLogs(serverURL, apiKey, batch)
@@ -161,7 +158,9 @@ func startFileCollector(
 			// Update offset only after successful send
 			state.Offset = newOffset
 			fileStates[src.Path] = state
-			saveState()
+			stateMu.Lock()
+			stateDirty = true
+			stateMu.Unlock()
 
 			// Backlog catch-up mode
 			backlog := stat.Size() - state.Offset
@@ -175,7 +174,7 @@ func startFileCollector(
 
 func startDirectoryCollector(
 	ctx context.Context,
-	accountID, agentID, hostname string,
+	agentID, hostname string,
 	src config.LogSource,
 	serverURL, apiKey string,
 	interval int,
@@ -230,7 +229,6 @@ func startDirectoryCollector(
 
 				go startFileCollector(
 					ctx,
-					accountID,
 					agentID,
 					hostname,
 					fileSrc,
@@ -277,7 +275,7 @@ func isTimestampLine(line string) bool {
 
 func startCommandCollector(
 	ctx context.Context,
-	accountID, agentID, hostname string,
+	agentID, hostname string,
 	src config.LogSource,
 	serverURL, apiKey string,
 	interval int,
@@ -304,7 +302,6 @@ func startCommandCollector(
 			var entries []sender.LogEntry
 			for _, l := range lines {
 				entries = append(entries, sender.LogEntry{
-					AccountID: accountID,
 					AgentID:   agentID,
 					Hostname:  hostname,
 					Timestamp: time.Now().Unix(),
@@ -318,10 +315,9 @@ func startCommandCollector(
 			}
 
 			batch := sender.LogBatch{
-				AccountID: accountID,
-				AgentID:   agentID,
-				Hostname:  hostname,
-				Logs:      entries,
+				AgentID:  agentID,
+				Hostname: hostname,
+				Logs:     entries,
 			}
 
 			_ = sender.SendLogs(serverURL, apiKey, batch)

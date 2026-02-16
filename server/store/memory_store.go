@@ -77,10 +77,10 @@ func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	h, ok := m.hosts[metrics.Hostname]
+	h, ok := m.hosts[metrics.AgentID]
 	if !ok {
 		h = &HostState{}
-		m.hosts[metrics.Hostname] = h
+		m.hosts[metrics.AgentID] = h
 	}
 
 	h.Metrics = metrics
@@ -112,7 +112,7 @@ func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
 			t = time.Unix(l.Timestamp, 0)
 		}
 		h.Logs = append(h.Logs, shared.LogEntry{
-			AccountID: l.AccountID,
+			TenantID:  l.TenantID,
 			AgentID:   l.AgentID,
 			Hostname:  l.Hostname,
 			Level:     l.Level,
@@ -128,7 +128,7 @@ func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
 // Fetch logs
 // -------------------------------
 func (m *MemoryStore) GetLogs(
-	accountID string,
+	TenantID string,
 	hostname string,
 	agentID string,
 	from, to time.Time,
@@ -145,7 +145,7 @@ func (m *MemoryStore) GetLogs(
 	for _, h := range m.hosts {
 		for _, l := range h.Logs {
 
-			if accountID != "" && l.AccountID != accountID {
+			if TenantID != "" && l.TenantID != TenantID {
 				continue
 			}
 			if agentID != "" && l.AgentID != agentID {
@@ -182,7 +182,7 @@ func (m *MemoryStore) GetLogs(
 	return out, nil
 }
 
-func (m *MemoryStore) GetLogSources(accountID, agentID string) ([]string, error) {
+func (m *MemoryStore) GetLogSources(TenantID, agentID string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -190,7 +190,7 @@ func (m *MemoryStore) GetLogSources(accountID, agentID string) ([]string, error)
 
 	for _, h := range m.hosts {
 		for _, l := range h.Logs {
-			if l.AccountID != accountID || l.AgentID != agentID {
+			if l.TenantID != TenantID || l.AgentID != agentID {
 				continue
 			}
 			if src, ok := l.Tags["source"]; ok {
@@ -222,12 +222,15 @@ func (m *MemoryStore) InsertAPIKey(k shared.APIKey) error {
 	return nil
 }
 
-func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, error) {
+func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, string, error) {
 	hash := hashAPIKey(rawKey)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	_, ok := m.apiKeys[hash]
-	return ok, nil
+	k, ok := m.apiKeys[hash]
+	if !ok {
+		return false, "", nil
+	}
+	return true, k.TenantID, nil
 }
 
 func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
@@ -243,7 +246,7 @@ func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
 	return nil
 }
 
-func (m *MemoryStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+func (m *MemoryStore) ListAgents(TenantID string) ([]shared.AgentInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -251,16 +254,16 @@ func (m *MemoryStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
 
 	for hostname, h := range m.hosts {
 		agents = append(agents, shared.AgentInfo{
-			AccountID: accountID,
-			Hostname:  hostname,
-			LastSeen:  time.Unix(h.LastSeen, 0),
+			TenantID: TenantID,
+			Hostname: hostname,
+			LastSeen: time.Unix(h.LastSeen, 0),
 		})
 	}
 
 	return agents, nil
 }
 
-func (m *MemoryStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+func (m *MemoryStore) GetLatestHostMetrics(TenantID string) (map[string]shared.HostMetrics, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 

@@ -6,20 +6,20 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
-	"os/signal"
-	"runtime"
-	"syscall"
-	"time"
-
 	"opslense-pulse/agent/collector"
 	"opslense-pulse/agent/config"
 	"opslense-pulse/agent/containers"
 	"opslense-pulse/agent/heartbeat"
 	"opslense-pulse/agent/identity"
 	"opslense-pulse/agent/metrics"
+	"opslense-pulse/agent/retry"
 	"opslense-pulse/agent/sender"
 	"opslense-pulse/shared"
+	"os"
+	"os/signal"
+	"runtime"
+	"syscall"
+	"time"
 )
 
 const AgentVersion = "1.0.0"
@@ -146,7 +146,6 @@ func main() {
 	hostname, _ := os.Hostname()
 	serverURL := cfg.Server.URL
 	apiKey := cfg.Server.APIKey
-	accountID := cfg.AccountID // <--- configurable accountID
 
 	if serverURL == "" || apiKey == "" {
 		log.Fatal("🌐 server.url and 🔐 server.api_key must be set in agent config")
@@ -175,7 +174,6 @@ func main() {
 	for _, src := range logSources {
 		go collector.StartLogSource(
 			ctx,
-			cfg.AccountID,
 			agentID,
 			hostname,
 			src,
@@ -194,8 +192,9 @@ func main() {
 	if dockerAvailable {
 		log.Println("🐳 Docker detected: starting container collectors...")
 
-		go collector.StartContainerMetricsCollector(ctx, agentID, accountID, hostname, serverURL, apiKey, 10)
-		go collector.StartContainerLogsCollector(ctx, agentID, accountID, hostname, serverURL, apiKey, 10)
+		go collector.StartContainerMetricsCollector(ctx, agentID, hostname, serverURL, apiKey, 10)
+		go collector.StartContainerLogsCollector(ctx, agentID, hostname, serverURL, apiKey, 10)
+		defer containers.Shutdown()
 	}
 
 	// Main metrics + heartbeat loop
@@ -206,6 +205,8 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Println("Agent shutting down gracefully...")
+			// Close Docker client if initialized
+			containers.Shutdown()
 			return
 		case <-sig:
 			cancel()
@@ -214,41 +215,39 @@ func main() {
 
 			// Collect host metrics
 			memTotal, memUsed := metrics.Memory()
+			diskTotal, diskUsed := metrics.DiskUsage()
 			osName, uptime := metrics.HostInfo()
 
 			m := shared.HostMetrics{
-				AccountID:  cfg.AccountID,
-				AgentID:    agentID,
-				Hostname:   hostname,
-				OS:         osName,
-				Version:    AgentVersion,
-				Timestamp:  time.Now().Unix(),
-				Cores:      runtime.NumCPU(),
-				MemTotalMB: float32(memTotal),
-				MemUsedMB:  float32(memUsed),
-				UptimeSec:  uptime,
-				CPUPercent: float32(metrics.CPUPercent()),
-				Tags:       cfg.Tags,
-				IP:         getLocalIP(),
+				AgentID:     agentID,
+				Hostname:    hostname,
+				OS:          osName,
+				Version:     AgentVersion,
+				Timestamp:   time.Now().Unix(),
+				Cores:       runtime.NumCPU(),
+				MemTotalMB:  float32(memTotal),
+				MemUsedMB:   float32(memUsed),
+				DiskTotalMB: float32(diskTotal),
+				DiskUsedMB:  float32(diskUsed),
+				UptimeSec:   uptime,
+				CPUPercent:  float32(metrics.CPUPercent()),
+				Tags:        cfg.Tags,
+				IP:          getLocalIP(),
 			}
 
 			// Send host metrics with retry
-			go func() {
-				if err := retrySend(3, 2*time.Second, func() error {
-					return sender.Send(serverURL, apiKey, m)
-				}); err != nil {
-					log.Println("Metrics send failed:", err)
-				}
-			}()
+			if err := retry.Do(3, 2*time.Second, func() error {
+				return sender.Send(serverURL, apiKey, m)
+			}); err != nil {
+				log.Println("Metrics send failed:", err)
+			}
 
 			// Send heartbeat with retry
-			go func() {
-				if err := retrySend(3, 2*time.Second, func() error {
-					return heartbeat.Send(serverURL, apiKey, accountID, agentID, hostname)
-				}); err != nil {
-					log.Println("Heartbeat send failed:", err)
-				}
-			}()
+			if err := retry.Do(3, 2*time.Second, func() error {
+				return heartbeat.Send(serverURL, apiKey, agentID, hostname)
+			}); err != nil {
+				log.Println("Heartbeat send failed:", err)
+			}
 
 			// Correct sleep to avoid drift
 			elapsed := time.Since(start)
@@ -258,18 +257,4 @@ func main() {
 			}
 		}
 	}
-}
-
-// retrySend retries the provided function with exponential backoff
-func retrySend(attempts int, baseDelay time.Duration, fn func() error) error {
-	delay := baseDelay
-	for i := 0; i < attempts; i++ {
-		if err := fn(); err != nil {
-			time.Sleep(delay)
-			delay *= 2
-		} else {
-			return nil
-		}
-	}
-	return fmt.Errorf("all retries failed")
 }

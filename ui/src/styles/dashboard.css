@@ -807,3 +807,197 @@ pre {
         min-width: 100%;
     }
 }
+
+.drawerOverlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1000;
+}
+
+.drawerOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(3px);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1000;
+}
+
+.drawer {
+  width: 480px;
+  height: 100%;
+  background: #0f172a;
+  overflow-y: auto;
+  padding: 24px;
+  box-shadow: -8px 0 20px rgba(0,0,0,0.4);
+  animation: slideIn 0.25s ease;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+
+.drawerHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.drawerSection {
+  margin-top: 30px;
+}
+
+.metricsGrid {
+  display: flex;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.metricCard {
+  background: #111827;
+  padding: 16px;
+  border-radius: 10px;
+  flex: 1;
+}
+
+.metricLabel {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.metricValue {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.tagsWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  background: #1f2937;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.logBox {
+  background: #020617;
+  padding: 12px;
+  border-radius: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.logLine {
+  margin-bottom: 4px;
+}
+
+.containerTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.containerTable th,
+.containerTable td {
+  padding: 6px;
+  border-bottom: 1px solid #1f2937;
+}
+
+.logSearch {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background: #1f2937;
+  color: white;
+}
+
+.logFilter {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #1f2937;
+  color: white;
+  border: none;
+}
+
+.more-tags {
+  position: relative;
+}
+
+.tooltip {
+  display: none;
+  position: absolute;
+  top: -10px;
+  left: 110%;
+  background: #111827;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  min-width: 120px;
+  z-index: 1000;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+}
+
+.more-tags:hover .tooltip {
+  display: block;
+}
+
+.tenantName {
+  font-size: 13px;
+  opacity: 0.8;
+  margin-top: 4px;
+}
+
+.tenantSelect {
+  width: 100%;
+  padding: 6px;
+  border-radius: 6px;
+  background: #1f2937;
+  color: white;
+  border: 1px solid #374151;
+}
+
+.userSection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.signedIn {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.badge {
+  font-size: 11px;
+  background: #1e40af;
+  padding: 4px 8px;
+  border-radius: 6px;
+  color: white;
+}
+
+.sidebarFooter {
+  margin-top: auto;
+  padding: 16px;
+  border-top: 1px solid #1f2937;
+}

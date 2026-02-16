@@ -3,24 +3,30 @@ package collector
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"opslense-pulse/agent/config"
 )
 
+var stateFlushOnce sync.Once
+
 func StartLogSource(
 	ctx context.Context,
-	accountID, agentID, hostname string,
+	agentID, hostname string,
 	src config.LogSource,
 	serverURL, apiKey string,
 	interval int,
 ) {
+
+	stateFlushOnce.Do(func() {
+		go periodicStateFlush(ctx)
+	})
 	fmt.Println("📦 Starting log source:", src.Name, "type:", src.Type)
 
 	switch src.Type {
 	case "file":
 		startFileCollector(
 			ctx,
-			accountID,
 			agentID,
 			hostname,
 			src,
@@ -32,7 +38,6 @@ func StartLogSource(
 	case "directory":
 		startDirectoryCollector(
 			ctx,
-			accountID,
 			agentID,
 			hostname,
 			src,
@@ -44,7 +49,6 @@ func StartLogSource(
 	case "command":
 		startCommandCollector(
 			ctx,
-			accountID,
 			agentID,
 			hostname,
 			src,

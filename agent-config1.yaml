@@ -1,6 +1,6 @@
 server:
   url: http://server:9898
-  api_key: opl_100ce09934d66ef417da8b454ef4862e09b6bef5acc3f5ba42ad99448477ac9f
+  api_key: opl_58d93110ad7445c7162a1a50a206b1c7ce05fc0eaef4e136c5c63a585a21d4b0
 
 account_id: default
 

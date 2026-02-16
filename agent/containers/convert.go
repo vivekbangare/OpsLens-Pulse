@@ -6,11 +6,10 @@ import (
 
 func ToSharedMetrics(
 	raw RawContainerMetrics,
-	accountID, agentID, hostname string,
+	agentID, hostname string,
 ) shared.ContainerMetrics {
 
 	return shared.ContainerMetrics{
-		AccountID:     accountID,
 		AgentID:       agentID,
 		Hostname:      hostname,
 		ContainerID:   raw.ID,

@@ -10,6 +10,15 @@ import (
 	"opslense-pulse/shared"
 )
 
+var httpClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
+
 // Send sends host metrics to server
 func Send(serverURL, apiKey string, metrics shared.HostMetrics) error {
 	body, err := json.Marshal(metrics)
@@ -25,8 +34,8 @@ func Send(serverURL, apiKey string, metrics shared.HostMetrics) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
+
 	if err != nil {
 		return err
 	}
@@ -40,14 +49,20 @@ func Send(serverURL, apiKey string, metrics shared.HostMetrics) error {
 
 // SendHeartbeat sends heartbeat info
 func SendHeartbeat(serverURL, apiKey string, hb shared.Heartbeat) error {
-	body, _ := json.Marshal(hb)
+	body, err := json.Marshal(hb)
+	if err != nil {
+		return err
+	}
 
-	req, _ := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
+
 	if err != nil {
 		return err
 	}
@@ -75,8 +90,8 @@ func SendContainerMetrics(serverURL, apiKey string, m shared.ContainerMetrics) e
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
+
 	if err != nil {
 		return err
 	}
@@ -103,8 +118,8 @@ func SendContainerLogs(serverURL, apiKey string, batch shared.ContainerLogBatch)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
+
 	if err != nil {
 		return err
 	}

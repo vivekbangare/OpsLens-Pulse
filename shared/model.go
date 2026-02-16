@@ -6,10 +6,10 @@ import "time"
 // HostMetrics: metrics sent by an agent
 // -------------------------------
 type HostMetrics struct {
-	AccountID    string            `json:"account_id"` // multi-tenant
-	AgentID      string            `json:"agent_id"`   // unique agent id
-	Hostname     string            `json:"hostname"`   // host name
-	OS           string            `json:"os"`         // add this
+	TenantID     string            `json:"tenant_id"` // multi-tenant
+	AgentID      string            `json:"agent_id"`  // unique agent id
+	Hostname     string            `json:"hostname"`  // host name
+	OS           string            `json:"os"`        // add this
 	IP           string            `json:"ip"`
 	Version      string            `json:"version"`
 	Cores        int               `json:"cores"`
@@ -30,7 +30,7 @@ type HostMetrics struct {
 // LogEntry: individual log from agent
 // -------------------------------
 type LogEntry struct {
-	AccountID string            `json:"account_id"` // multi-tenant
+	TenantID  string            `json:"tenant_id"` // multi-tenant
 	AgentID   string            `json:"agent_id"`
 	Hostname  string            `json:"hostname"`
 	Timestamp int64             `json:"timestamp"` // epoch seconds
@@ -45,17 +45,17 @@ type LogEntry struct {
 // LogBatch: batch of logs sent by agent
 // -------------------------------
 type LogBatch struct {
-	AccountID string     `json:"account_id"`
-	AgentID   string     `json:"agent_id"`
-	Hostname  string     `json:"hostname"`
-	Logs      []LogEntry `json:"logs"`
+	TenantID string     `json:"tenant_id"`
+	AgentID  string     `json:"agent_id"`
+	Hostname string     `json:"hostname"`
+	Logs     []LogEntry `json:"logs"`
 }
 
 // -------------------------------
 // APIKey: API key info
 // -------------------------------
 type APIKey struct {
-	AccountID   string `json:"account_id"`
+	TenantID    string `json:"tenant_id"`
 	KeyID       string `json:"key_id"`
 	KeyHash     string `json:"key_hash"`
 	Name        string `json:"name"`
@@ -68,7 +68,7 @@ type APIKey struct {
 // AgentInfo: for agent metadata & heartbeat
 // -------------------------------
 type AgentInfo struct {
-	AccountID   string            `json:"account_id"`
+	TenantID    string            `json:"tenant_id"`
 	AgentID     string            `json:"agent_id"`
 	Hostname    string            `json:"hostname"`
 	IP          string            `json:"ip"`
@@ -85,14 +85,14 @@ type AgentInfo struct {
 // Heartbeat struct (optional for API)
 // -------------------------------
 type Heartbeat struct {
-	AccountID string    `json:"account_id"`
+	TenantID  string    `json:"tenant_id"`
 	AgentID   string    `json:"agent_id"`
 	Hostname  string    `json:"hostname"`
 	Timestamp time.Time `json:"timestamp"` // epoch seconds
 }
 
 type ContainerMetrics struct {
-	AccountID     string            `json:"account_id"`
+	TenantID      string            `json:"tenant_id"`
 	AgentID       string            `json:"agent_id"`
 	Hostname      string            `json:"hostname"`
 	Image         string            `json:"image"`
@@ -112,7 +112,7 @@ type ContainerMetrics struct {
 }
 
 type ContainerLog struct {
-	AccountID     string            `json:"account_id"`
+	TenantID      string            `json:"tenant_id"`
 	AgentID       string            `json:"agent_id"`
 	Hostname      string            `json:"hostname"`
 	ContainerID   string            `json:"container_id"`
@@ -125,14 +125,14 @@ type ContainerLog struct {
 }
 
 type ContainerLogBatch struct {
-	AccountID string         `json:"account_id"`
-	AgentID   string         `json:"agent_id"`
-	Hostname  string         `json:"hostname"`
-	Logs      []ContainerLog `json:"logs"`
+	TenantID string         `json:"tenant_id"`
+	AgentID  string         `json:"agent_id"`
+	Hostname string         `json:"hostname"`
+	Logs     []ContainerLog `json:"logs"`
 }
 
 type ContainerLogEntry struct {
-	AccountID   string `json:"account_id"`
+	TenantID    string `json:"tenant_id"`
 	AgentID     string `json:"agent_id"`
 	Hostname    string `json:"hostname"`
 	ContainerID string `json:"container_id"`

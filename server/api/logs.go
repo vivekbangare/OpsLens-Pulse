@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
 	"opslense-pulse/shared"
 	"strconv"
@@ -16,23 +17,27 @@ Agent → Server (INSERT)
 */
 func LogsHandler(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+
+		if !ok || tenantID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
 		var batch shared.LogBatch
 		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
+		batch.TenantID = tenantID
 		log.Printf(
-			"📥 Inserting logs: account=%s agent=%s host=%s count=%d",
-			batch.AccountID,
+			"📥 Inserting logs: tenant=%s agent=%s host=%s count=%d",
+			batch.TenantID,
 			batch.AgentID,
 			batch.Hostname,
 			len(batch.Logs),
 		)
 
-		if batch.AccountID == "" {
-			http.Error(w, "missing account_id", http.StatusBadRequest)
-			return
-		}
 		if batch.AgentID == "" {
 			http.Error(w, "missing agent_id", http.StatusBadRequest)
 			return
@@ -59,16 +64,16 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
 		// ✅ Query params
-		accountID := r.URL.Query().Get("account_id")
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+
+		if !ok || tenantID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		agentID := r.URL.Query().Get("agent_id")
 		hostname := r.URL.Query().Get("hostname")
 		level := r.URL.Query().Get("level")
 		source := r.URL.Query().Get("source")
-
-		if accountID == "" {
-			http.Error(w, "missing account_id", http.StatusBadRequest)
-			return
-		}
 
 		// Time range
 		var start, end time.Time
@@ -93,7 +98,7 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 		}
 
 		logs, err := s.GetLogs(
-			accountID,
+			tenantID,
 			hostname,
 			agentID,
 			start,
@@ -115,9 +120,14 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 func LogSourcesHandler(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		agentID := r.URL.Query().Get("agent_id")
-		accountID := r.Context().Value("account_id").(string)
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 
-		out, err := s.GetLogSources(accountID, agentID)
+		if !ok || tenantID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		out, err := s.GetLogSources(tenantID, agentID)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

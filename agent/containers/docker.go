@@ -3,6 +3,7 @@ package containers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -22,24 +23,45 @@ type RawContainerMetrics struct {
 	Timestamp  time.Time
 }
 
-func ListRunning() ([]types.Container, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return nil, err
-	}
-	defer cli.Close()
+var dockerClient *client.Client
 
-	return cli.ContainerList(context.Background(), types.ContainerListOptions{})
+// Initialize reusable Docker client
+func init() {
+	var err error
+
+	dockerClient, err = client.NewClientWithOpts(
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
+	)
+
+	if err != nil {
+		// Do NOT panic — allow agent to run without docker
+		dockerClient = nil
+	}
 }
 
-func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return RawContainerMetrics{}, err
+// ListRunning returns running containers
+func ListRunning() ([]types.Container, error) {
+	if dockerClient == nil {
+		return nil, fmt.Errorf("docker client not initialized")
 	}
-	defer cli.Close()
 
-	stats, err := cli.ContainerStatsOneShot(context.Background(), c.ID)
+	return dockerClient.ContainerList(
+		context.Background(),
+		types.ContainerListOptions{},
+	)
+}
+
+// GetContainerMetrics returns CPU + Memory stats
+func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
+	if dockerClient == nil {
+		return RawContainerMetrics{}, fmt.Errorf("docker client not initialized")
+	}
+
+	stats, err := dockerClient.ContainerStatsOneShot(
+		context.Background(),
+		c.ID,
+	)
 	if err != nil {
 		return RawContainerMetrics{}, err
 	}
@@ -50,17 +72,27 @@ func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
 		return RawContainerMetrics{}, err
 	}
 
-	cpuDelta := float64(s.CPUStats.CPUUsage.TotalUsage - s.PreCPUStats.CPUUsage.TotalUsage)
-	sysDelta := float64(s.CPUStats.SystemUsage - s.PreCPUStats.SystemUsage)
+	cpuDelta := float64(
+		s.CPUStats.CPUUsage.TotalUsage -
+			s.PreCPUStats.CPUUsage.TotalUsage,
+	)
+
+	sysDelta := float64(
+		s.CPUStats.SystemUsage -
+			s.PreCPUStats.SystemUsage,
+	)
 
 	cpuPercent := 0.0
 	if cpuDelta > 0 && sysDelta > 0 {
-		cpuPercent = (cpuDelta / sysDelta) * float64(len(s.CPUStats.CPUUsage.PercpuUsage)) * 100
+		cpuPercent = (cpuDelta / sysDelta) *
+			float64(len(s.CPUStats.CPUUsage.PercpuUsage)) * 100
 	}
+
 	name := ""
 	if len(c.Names) > 0 {
 		name = strings.TrimPrefix(c.Names[0], "/")
 	}
+
 	return RawContainerMetrics{
 		ID:         c.ID,
 		Name:       name,
@@ -73,21 +105,24 @@ func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
 	}, nil
 }
 
+// GetContainerLogs fetches recent container logs
 func GetContainerLogs(containerID string, tail int) ([]string, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	if err != nil {
-		return nil, err
+	if dockerClient == nil {
+		return nil, fmt.Errorf("docker client not initialized")
 	}
-	defer cli.Close()
 
 	options := types.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Timestamps: true,
-		Tail:       "100",
+		Tail:       fmt.Sprintf("%d", tail),
 	}
 
-	reader, err := cli.ContainerLogs(context.Background(), containerID, options)
+	reader, err := dockerClient.ContainerLogs(
+		context.Background(),
+		containerID,
+		options,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +133,11 @@ func GetContainerLogs(containerID string, tail int) ([]string, error) {
 		return nil, err
 	}
 
-	// Split into lines
-	lines := strings.Split(string(data), "\n")
-	return lines, nil
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
+}
+
+func Shutdown() {
+	if dockerClient != nil {
+		dockerClient.Close()
+	}
 }

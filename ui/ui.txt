@@ -1,0 +1,1346 @@
+===== FILE: ./vite.config.ts =====
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ["react", "react-dom", "react-router-dom"],
+          charts: ["recharts"]
+        }
+      }
+    }
+  }
+})
+===== FILE: ./src/App.tsx =====
+import { Routes, Route, Navigate, useParams } from "react-router-dom"
+import { useAuth } from "./auth/AuthContext"
+
+import Login from "./pages/Login"
+import FleetOverview from "./pages/FleetOverview"
+import Hosts from "./pages/Hosts"
+import LogsExplorer from "./pages/LogsExplorer"
+import Alerts from "./pages/Alerts"
+import Admin from "./pages/Admin"
+import HostDetails from "./pages/HostDetails"
+import AppLayout from "./layout/AppLayout"
+
+export default function App() {
+  const { token } = useAuth()
+
+  return (
+    <Routes>
+      {/* ---------------- PUBLIC ---------------- */}
+      {!token && (
+        <Route path="*" element={<Login />} />
+      )}
+
+      {/* ---------------- PROTECTED ---------------- */}
+      {token && (
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<Navigate to="fleet" />} />
+          <Route path="fleet" element={<FleetOverview />} />
+          <Route path="hosts" element={<Hosts />} />
+          <Route path="hosts/:agentId" element={<HostDetailsWrapper />} />
+          <Route path="logs" element={<LogsExplorer />} />
+          <Route path="alerts" element={<Alerts />} />
+          <Route path="admin" element={<Admin />} />
+          <Route path="*" element={<Navigate to="fleet" />} />
+        </Route>
+      )}
+    </Routes>
+  )
+}
+
+function HostDetailsWrapper() {
+  const { agentId } = useParams()
+
+  if (!agentId) return null
+
+  return <HostDetails agentId={agentId} />
+}
+
+===== FILE: ./src/main.tsx =====
+import ReactDOM from "react-dom/client"
+import { BrowserRouter } from "react-router-dom"
+import App from "./App"
+import "./styles/dashboard.css"
+import ErrorBoundary from "./components/ErrorBoundary"
+import { AuthProvider } from "./auth/AuthContext"
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <BrowserRouter>
+    <AuthProvider>
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </AuthProvider>
+  </BrowserRouter>
+)
+
+===== FILE: ./src/auth/AuthContext.tsx =====
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  ReactNode,
+} from "react"
+
+interface User {
+  id: string
+  username: string
+  email: string
+  is_super_admin?: boolean
+}
+
+interface AuthContextType {
+  token: string | null
+  user: User | null
+  login: (data: { token: string; user: User }) => void
+  logout: () => void
+  isAuthenticated: boolean
+}
+
+const AuthContext = createContext<AuthContextType | undefined>(
+  undefined
+)
+
+// -----------------------------
+// SAFE STORAGE HELPERS
+// -----------------------------
+function safeParse<T>(value: string | null): T | null {
+  if (!value || value === "undefined" || value === "null") {
+    return null
+  }
+
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [token, setToken] = useState<string | null>(null)
+  const [user, setUser] = useState<User | null>(null)
+
+  // -----------------------------
+  // LOAD FROM STORAGE (SAFE)
+  // -----------------------------
+  useEffect(() => {
+    const storedToken = sessionStorage.getItem("token")
+    const storedUser = safeParse<User>(
+      sessionStorage.getItem("user")
+    )
+
+    if (storedToken) setToken(storedToken)
+    if (storedUser) setUser(storedUser)
+  }, [])
+
+  // -----------------------------
+  // LOGIN
+  // -----------------------------
+  function login(data: { token: string; user: User }) {
+    sessionStorage.setItem("token", data.token)
+    sessionStorage.setItem("user", JSON.stringify(data.user))
+
+    setToken(data.token)
+    setUser(data.user)
+  }
+
+  // -----------------------------
+  // LOGOUT
+  // -----------------------------
+  function logout() {
+    sessionStorage.removeItem("token")
+    sessionStorage.removeItem("user")
+
+    setToken(null)
+    setUser(null)
+  }
+
+  const value: AuthContextType = {
+    token,
+    user,
+    login,
+    logout,
+    isAuthenticated: !!token,
+  }
+
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+    </AuthContext.Provider>
+  )
+}
+
+export function useAuth(): AuthContextType {
+  const ctx = useContext(AuthContext)
+  if (!ctx) {
+    throw new Error("useAuth must be used inside AuthProvider")
+  }
+  return ctx
+}
+
+===== FILE: ./src/layout/Topbar.tsx =====
+import { useAuth } from "../auth/AuthContext"
+
+export default function Topbar() {
+  const { logout, user } = useAuth()
+
+  return (
+    <div className="topbar">
+      <div className="search">
+        <span style={{ opacity: 0.75 }}>🔎</span>
+        <input placeholder="Search host, IP, tag, container…" />
+        <span className="kbd">⌘ K</span>
+      </div>
+
+      <div className="topbarRight">
+        <div className="topbar-right">
+          <span className="badge">
+            {user?.username}
+          </span>
+
+          <button
+            className="btn"
+            onClick={logout}
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/layout/AppLayout.tsx =====
+import Sidebar from "./Sidebar"
+import Topbar from "./Topbar"
+import { Outlet } from "react-router-dom"
+
+export default function AppLayout() {
+  return (
+    <div className="app">
+      <Sidebar />
+      <main className="main">
+        <Topbar />
+        <Outlet />
+      </main>
+    </div>
+  )
+}
+
+===== FILE: ./src/layout/Layout.tsx =====
+
+===== FILE: ./src/layout/Sidebar.tsx =====
+import { NavLink } from "react-router-dom"
+import { useAuth } from "../auth/AuthContext"
+
+export default function Sidebar() {
+  const { user, logout } = useAuth()
+
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <div className="logo"></div>
+        <div>
+          <h1>OpsLens</h1>
+          <p>Fleet Monitoring</p>
+        </div>
+      </div>
+
+      <nav className="nav">
+        <NavLink to="/fleet">⚡ Fleet Overview</NavLink>
+        <NavLink to="/hosts">🧩 Hosts</NavLink>
+        <NavLink to="/logs">🧾 Logs Explorer</NavLink>
+        <NavLink to="/alerts">🚨 Alerts</NavLink>
+        <NavLink to="/admin">🛡️ Admin</NavLink>
+      </nav>
+
+      <div className="sidebarFooter">
+        <div className="tenant">
+          <div className="row">
+            <div>
+              <div className="label">Signed in</div>
+              <div className="value">
+                {user?.username}
+              </div>
+            </div>
+
+            <button
+              className="btn secondary"
+              onClick={logout}
+            >
+              Logout
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
+===== FILE: ./src/components/Tabs.tsx =====
+
+===== FILE: ./src/components/MiniChart.tsx =====
+
+===== FILE: ./src/components/ContainerTable.tsx =====
+
+===== FILE: ./src/components/HostTable.tsx =====
+interface Props {
+  hosts: any[] | null | undefined
+  onSelect: (id: string) => void
+}
+
+export default function HostTable({ hosts, onSelect }: Props) {
+  if (!Array.isArray(hosts) || hosts.length === 0) {
+    return null
+  }
+
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Status</th>
+          <th>Last Seen</th>
+          <th>IP</th>
+          <th>OS</th>
+        </tr>
+      </thead>
+      <tbody>
+        {hosts.map((h) => (
+          <tr key={h.agent_id} onClick={() => onSelect(h.agent_id)}>
+            <td>{h.hostname}</td>
+            <td className={h.alive ? "alive" : "dead"}>
+              {h.alive ? "Alive" : "Down"}
+            </td>
+            <td>{h.last_seen ? new Date(h.last_seen).toLocaleString() : "—"}</td>
+            <td>{h.ip || "—"}</td>
+            <td>{h.os || "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+===== FILE: ./src/components/LogViewer.tsx =====
+interface Props {
+  logs: any[] | null | undefined
+}
+
+export default function LogViewer({ logs }: Props) {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return (
+      <div className="log-box">
+        No logs available
+      </div>
+    )
+  }
+
+  return (
+    <div className="log-box">
+      {logs.map((l, i) => (
+        <div key={i}>
+          {l.timestamp
+            ? new Date(l.timestamp * 1000).toLocaleString()
+            : "—"}{" "}
+          [{l.level || "info"}] {l.message || ""}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+===== FILE: ./src/components/KPIGrid.tsx =====
+
+===== FILE: ./src/components/Drawer.tsx =====
+import { useEffect, useState, useMemo } from "react"
+
+import {
+  fetchLogs,
+  fetchHostSummary,
+  fetchContainerMetrics,
+} from "../api/client"
+
+import {
+  LineChart,
+  Line,
+  ResponsiveContainer,
+} from "recharts"
+
+interface Props {
+  host: any
+  onClose: () => void
+}
+
+export default function Drawer({ host, onClose }: Props) {
+  const [summary, setSummary] = useState<any | null>(null)
+  const [logs, setLogs] = useState<any[]>([])
+  const [containers, setContainers] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [cpuHistory, setCpuHistory] = useState<number[]>([])
+  const [ramHistory, setRamHistory] = useState<number[]>([])
+
+  const [search, setSearch] = useState("")
+  const [levelFilter, setLevelFilter] = useState("all")
+
+  // 🔥 ESC key support
+  useEffect(() => {
+    function handleEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose()
+    }
+
+    window.addEventListener("keydown", handleEsc)
+    return () => window.removeEventListener("keydown", handleEsc)
+  }, [onClose])
+
+  useEffect(() => {
+    load()
+
+    const interval = setInterval(load, 5000)
+    return () => clearInterval(interval)
+  }, [host.agent_id])
+
+  async function load() {
+    try {
+      setLoading(true)
+
+      const [summaryResponse, logData, containerData] =
+        await Promise.all([
+          fetchHostSummary(host.agent_id),
+          fetchLogs(host.agent_id),
+          fetchContainerMetrics(host.agent_id),
+        ])
+
+      const actualSummary =
+        summaryResponse?.[host.agent_id] ?? summaryResponse ?? null
+
+      setSummary(actualSummary)
+
+      setLogs(Array.isArray(logData) ? logData : [])
+      setContainers(Array.isArray(containerData) ? containerData : [])
+
+      if (actualSummary?.cpu_percent !== undefined) {
+        setCpuHistory((prev) => [
+          ...prev.slice(-20),
+          actualSummary.cpu_percent,
+        ])
+      }
+
+      if (actualSummary?.mem_used_mb !== undefined) {
+        setRamHistory((prev) => [
+          ...prev.slice(-20),
+          actualSummary.mem_used_mb,
+        ])
+      }
+
+    } catch (err) {
+      console.error("Drawer load failed:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredLogs = useMemo(() => {
+    return logs.filter((l) => {
+      const matchesSearch =
+        l.message?.toLowerCase().includes(search.toLowerCase())
+
+      const matchesLevel =
+        levelFilter === "all" || l.level === levelFilter
+
+      return matchesSearch && matchesLevel
+    })
+  }, [logs, search, levelFilter])
+
+  return (
+    <div
+      className="drawerOverlay"
+      onClick={onClose}
+    >
+      <div
+        className="drawer"
+        onClick={(e) => e.stopPropagation()}
+      >
+
+        {/* HEADER */}
+        <div className="drawerHeader">
+          <div>
+            <h2>{host.hostname}</h2>
+            <div style={{ fontSize: 12, opacity: 0.6 }}>
+              {host.ip} • {host.os}
+            </div>
+          </div>
+          <button onClick={onClose}>✕</button>
+        </div>
+
+        {loading && <div style={{ padding: 20 }}>Loading...</div>}
+
+        {!loading && (
+          <>
+            {/* METRICS */}
+            <div className="drawerSection">
+              <h3>Key Metrics</h3>
+
+              <div className="metricsGrid">
+                <Metric label="CPU %" value={summary?.cpu_percent ?? "—"}>
+                  <Sparkline data={cpuHistory} />
+                </Metric>
+
+                <Metric label="RAM (MB)" value={summary?.mem_used_mb ?? "—"}>
+                  <Sparkline data={ramHistory} />
+                </Metric>
+
+                <Metric label="Uptime (sec)" value={summary?.uptime_sec ?? "—"} />
+              </div>
+            </div>
+
+            {/* TAGS */}
+            <div className="drawerSection">
+              <h3>Tags</h3>
+
+              {host?.tags && Object.keys(host.tags).length > 0 ? (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {Object.entries(host.tags).map(([k, v]) => (
+                    <span
+                      key={k}
+                      style={{
+                        padding: "4px 10px",
+                        background: "#1f2937",
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                      }}
+                    >
+                      {k}: {String(v)}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ opacity: 0.6 }}>
+                  No tags available
+                </div>
+              )}
+            </div>
+
+            {/* LOGS */}
+            <div className="drawerSection">
+              <h3>Logs</h3>
+
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <input
+                  placeholder="Search logs..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="logSearch"
+                />
+
+                <select
+                  value={levelFilter}
+                  onChange={(e) => setLevelFilter(e.target.value)}
+                  className="logFilter"
+                >
+                  <option value="all">All</option>
+                  <option value="info">Info</option>
+                  <option value="warn">Warn</option>
+                  <option value="error">Error</option>
+                </select>
+              </div>
+
+              <div className="logBox">
+                {filteredLogs.length === 0 && (
+                  <div style={{ opacity: 0.6 }}>
+                    No logs available
+                  </div>
+                )}
+
+                {filteredLogs.map((l, i) => (
+                  <div key={i} className="logLine">
+                    {l.timestamp
+                      ? new Date(l.timestamp * 1000).toLocaleString()
+                      : "—"}{" "}
+                    [{l.level ?? "info"}] {l.message ?? ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* CONTAINERS */}
+            <div className="drawerSection">
+              <h3>Containers</h3>
+
+              {containers.length === 0 ? (
+                <div style={{ opacity: 0.6 }}>
+                  No containers detected
+                </div>
+              ) : (
+                <table className="containerTable">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Status</th>
+                      <th>CPU</th>
+                      <th>RAM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {containers.map((c, i) => (
+                      <tr key={i}>
+                        <td>{c.name}</td>
+                        <td>{c.status}</td>
+                        <td>{c.cpu_percent ?? "—"}%</td>
+                        <td>{c.mem_used_mb ?? "—"} MB</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Metric({
+  label,
+  value,
+  children,
+}: {
+  label: string
+  value: any
+  children?: React.ReactNode
+}) {
+  return (
+    <div className="metricCard">
+      <div className="metricLabel">{label}</div>
+      <div className="metricValue">{value}</div>
+      {children}
+    </div>
+  )
+}
+
+function Sparkline({ data }: { data: number[] }) {
+  const chartData = data.map((v, i) => ({
+    name: i,
+    value: v,
+  }))
+
+  if (chartData.length === 0) return null
+
+  return (
+    <div style={{ width: "100%", height: 60, minHeight: 60 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData}>
+          <Line
+            type="monotone"
+            dataKey="value"
+            stroke="#3b82f6"
+            strokeWidth={2}
+            dot={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+
+===== FILE: ./src/components/AIBox.tsx =====
+
+===== FILE: ./src/components/HostCard.tsx =====
+
+===== FILE: ./src/components/ErrorBoundary.tsx =====
+import React from "react"
+
+interface State {
+  hasError: boolean
+  error?: Error
+}
+
+export default class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  State
+> {
+  constructor(props: any) {
+    super(props)
+    this.state = { hasError: false }
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: any) {
+    console.error("🔥 UI CRASH CAUGHT:", error, errorInfo)
+  }
+
+  handleReload = () => {
+    window.location.reload()
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: "40px", textAlign: "center" }}>
+          <h2>⚠️ Something went wrong</h2>
+          <p>The dashboard encountered an unexpected error.</p>
+          <button onClick={this.handleReload}>Reload</button>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
+
+===== FILE: ./src/hooks/useLogs.ts =====
+
+===== FILE: ./src/hooks/useContainers.ts =====
+
+===== FILE: ./src/hooks/useHosts.ts =====
+
+===== FILE: ./src/api/client.ts =====
+// -------------------------------
+// API CLIENT (Production Safe)
+// -------------------------------
+
+function getHeaders(): HeadersInit {
+  const token = sessionStorage.getItem("token")
+
+  if (!token) return {}
+
+  return {
+    Authorization: "Bearer " + token,
+    "Content-Type": "application/json",
+  }
+}
+
+
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, {
+      headers: getHeaders(),
+    })
+
+    if (!res.ok) {
+      console.warn(`API error: ${res.status} → ${url}`)
+      return null
+    }
+
+    const data = await res.json()
+    return data ?? null
+  } catch (err) {
+    console.error("Network/API failure:", err)
+    return null
+  }
+}
+
+// -------------------------------
+// Hosts
+// -------------------------------
+
+export async function fetchHosts(): Promise<any[]> {
+  const data = await safeFetch("/api/hosts")
+  return Array.isArray(data) ? data : []
+}
+
+// -------------------------------
+// Host Summary
+// -------------------------------
+
+export async function fetchHostSummary(agentId: string) {
+  const data = await safeFetch("/api/hosts/summary")
+
+  if (!data || typeof data !== "object") return null
+
+  return data[agentId] ?? null
+}
+
+// -------------------------------
+// Logs
+// -------------------------------
+
+export async function fetchLogs(agentId: string): Promise<any[]> {
+  const data = await safeFetch(
+    `/api/logs/fetch?agent_id=${agentId}`
+  )
+
+  if (Array.isArray(data)) return data
+  if (Array.isArray(data?.logs)) return data.logs
+
+  return []
+}
+
+// -------------------------------
+// Container Metrics (FIXED)
+// -------------------------------
+
+export async function fetchContainerMetrics(agentId: string): Promise<any[]> {
+  try {
+    const res = await fetch("/api/container/metrics", {
+      method: "POST",
+      headers: {
+        ...getHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        agent_id: agentId,
+      }),
+    })
+
+    if (!res.ok) {
+      console.warn(`API error: ${res.status} → container metrics`)
+      return []
+    }
+
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  } catch (err) {
+    console.error("Container metrics error:", err)
+    return []
+  }
+}
+
+
+// -------------------------------
+// Container Logs (FIXED)
+// -------------------------------
+
+export async function fetchContainerLogs(agentId: string): Promise<any[]> {
+  const data = await safeFetch(
+    `/api/container/logs?agent_id=${agentId}`
+  )
+
+  return Array.isArray(data) ? data : []
+}
+
+===== FILE: ./src/pages/HostDetails.tsx =====
+import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
+
+import {
+  fetchLogs,
+  fetchHostSummary,
+  fetchContainerMetrics,
+} from "../api/client"
+
+const navigate = useNavigate()
+
+interface Props {
+  agentId: string
+}
+
+export default function HostDetails({ agentId }: Props) {
+  const [logs, setLogs] = useState<any[]>([])
+  const [summary, setSummary] = useState<any>(null)
+  const [containers, setContainers] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    loadAll()
+
+    const interval = setInterval(() => {
+      loadAll()
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [agentId])
+
+  async function loadAll() {
+    setLoading(true)
+
+    try {
+    const [logData, summaryData, containerData] =
+      await Promise.all([
+        fetchLogs(agentId),
+        fetchHostSummary(agentId),
+        fetchContainerMetrics(agentId),
+      ])
+
+
+    console.log("LOGS:", logData)
+    console.log("SUMMARY:", summaryData)
+    
+    console.log("CONTAINERS:", containerData)
+
+      setLogs(Array.isArray(logData) ? logData : [])
+      setSummary(summaryData ?? null)
+      setContainers(Array.isArray(containerData) ? containerData : [])
+    } catch (err) {
+      console.error("Failed to load host data:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={{ padding: "20px" }}>
+      <button onClick={() => navigate(-1)}>⬅ Back</button>
+
+      <h2 style={{ marginTop: "10px" }}>Host Details</h2>
+
+      {loading && <p>Loading data...</p>}
+
+      {/* ================= METRICS ================= */}
+      <div
+        style={{
+          background: "#111827",
+          padding: "20px",
+          borderRadius: "12px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3>Key Metrics (1h)</h3>
+
+        <div style={{ display: "flex", gap: "30px", flexWrap: "wrap" }}>
+          <div>
+            <strong>CPU:</strong>{" "}
+            {summary?.cpu_percent?.toFixed(2) ?? "—"} %
+          </div>
+
+          <div>
+            <strong>RAM:</strong>{" "}
+            {summary?.mem_used_mb ?? "—"} /{" "}
+            {summary?.mem_total_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Disk Used:</strong>{" "}
+            {summary?.disk_used_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Network In:</strong>{" "}
+            {summary?.network_in_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Network Out:</strong>{" "}
+            {summary?.network_out_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Uptime:</strong>{" "}
+            {summary?.uptime_sec
+              ? Math.floor(summary.uptime_sec / 3600) + "h"
+              : "—"}
+          </div>
+        </div>
+
+        {/* TAGS */}
+        <div style={{ marginTop: "15px" }}>
+          <strong>Tags:</strong>
+
+          <div style={{ marginTop: "6px" }}>
+            {summary?.tags && Object.keys(summary.tags).length > 0 ? (
+              Object.entries(summary.tags).map(([k, v]) => (
+                <span
+                  key={k}
+                  style={{
+                    marginRight: "6px",
+                    padding: "4px 8px",
+                    background: "#1f2937",
+                    borderRadius: "6px",
+                    fontSize: "12px",
+                  }}
+                >
+                  {k}: {String(v)}
+                </span>
+              ))
+            ) : (
+              <span style={{ opacity: 0.6 }}>No tags</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ================= LOGS ================= */}
+      <div
+        style={{
+          background: "#0f172a",
+          padding: "15px",
+          borderRadius: "12px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3>Logs</h3>
+
+        {logs.length === 0 && <p>No logs available</p>}
+
+        <div
+          style={{
+            maxHeight: "300px",
+            overflowY: "auto",
+            fontFamily: "monospace",
+            fontSize: "13px",
+          }}
+        >
+          {logs.map((l, i) => (
+            <div key={i} style={{ marginBottom: "4px" }}>
+              {l.timestamp
+                ? new Date(l.timestamp * 1000).toLocaleString()
+                : "—"}{" "}
+              [{l.level ?? "info"}] {l.message ?? ""}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ================= CONTAINERS ================= */}
+      <div
+        style={{
+          background: "#0f172a",
+          padding: "15px",
+          borderRadius: "12px",
+        }}
+      >
+        <h3>Containers</h3>
+
+        {containers.length === 0 && <p>No containers detected</p>}
+
+        {containers.map((c, i) => (
+          <div key={i} style={{ marginBottom: "6px" }}>
+            {c.name} — {c.status}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/Hosts.tsx =====
+import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { fetchHosts } from "../api/client"
+
+export default function Hosts() {
+  const [hosts, setHosts] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  async function load() {
+    const data = await fetchHosts()
+    setHosts(Array.isArray(data) ? data : [])
+    setLoading(false)
+  }
+
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Hosts</h2>
+
+      {loading && <p>Loading...</p>}
+
+      <div className="tableWrap" style={{ marginTop: "20px" }}>
+        <table>
+          <thead>
+            <tr>
+              <th>Status</th>
+              <th>Host</th>
+              <th>OS</th>
+              <th>Last Seen</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {hosts.map((h) => (
+              <tr
+                key={h.agent_id}
+                className="row"
+                onClick={() => navigate(`/hosts/${h.agent_id}`)}
+                style={{ cursor: "pointer" }}
+              >
+                <td>
+                  <span className="status">
+                    <span
+                      className={`dot ${h.alive ? "good" : "bad"}`}
+                    ></span>
+                    {h.alive ? "Active" : "Dead"}
+                  </span>
+                </td>
+
+                <td>
+                  <b>{h.hostname}</b>
+                  <div style={{ fontSize: 12, opacity: 0.6 }}>
+                    {h.ip}
+                  </div>
+                </td>
+
+                <td>{h.os || "—"}</td>
+
+                <td>
+                  {h.last_seen
+                    ? new Date(h.last_seen).toLocaleString()
+                    : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/LogsExplorer.tsx =====
+export default function LogsExplorer() {
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Logs Explorer</h2>
+      <p>Advanced log search coming soon...</p>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/Login.tsx =====
+import { useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { useAuth } from "../auth/AuthContext"
+
+interface LoginResponse {
+  token: string
+  user: {
+    id: string
+    username: string
+    email: string
+    is_super_admin?: boolean
+  }
+}
+
+export default function Login() {
+  const { login } = useAuth()
+  const navigate = useNavigate()
+
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+
+    setLoading(true)
+    setError("")
+
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      })
+
+      if (!res.ok) {
+        throw new Error("Invalid credentials")
+      }
+
+      const data: LoginResponse = await res.json()
+
+      login({
+        token: data.token,
+        user: data.user,
+      })
+
+      navigate("/fleet")
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="login-page-wrapper">
+      <div className="login-container">
+        <h1>OpsLens Pulse</h1>
+
+        <form onSubmit={handleSubmit}>
+          <input
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+
+          <button type="submit" disabled={loading}>
+            {loading ? "Signing in..." : "Login"}
+          </button>
+        </form>
+
+        {error && <div className="error">{error}</div>}
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/FleetOverview.tsx =====
+import { useEffect, useState } from "react"
+import { fetchHosts } from "../api/client"
+
+export default function FleetOverview() {
+  const [hosts, setHosts] = useState<any[]>([])
+
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  async function load() {
+    const data = await fetchHosts()
+    setHosts(Array.isArray(data) ? data : [])
+  }
+
+  // ---------------- KPI Calculations ----------------
+  const safeHosts = Array.isArray(hosts) ? hosts : []
+
+  const total = safeHosts.length
+  const alive = safeHosts.filter(h => h?.alive).length
+  const dead = total - alive
+
+  const fleetHealth =
+    total > 0 ? Math.round((alive / total) * 100) : 0
+
+  const environments = [
+    ...new Set(hosts.map((h) => h.environment).filter(Boolean)),
+  ]
+
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Fleet Overview</h2>
+      <p style={{ opacity: 0.6 }}>
+        Real-time infrastructure health summary
+      </p>
+
+      {/* ---------------- KPI GRID ---------------- */}
+      <div className="kpis" style={{ marginTop: "20px" }}>
+        <div className="kpi">
+          <div className="label">Total Hosts</div>
+          <div className="value">{total}</div>
+        </div>
+
+        <div className="kpi">
+          <div className="label">Alive</div>
+          <div className="value">{alive}</div>
+        </div>
+
+        <div className="kpi">
+          <div className="label">Dead</div>
+          <div className="value">{dead}</div>
+        </div>
+
+        <div className="kpi">
+          <div className="label">Fleet Health</div>
+          <div className="value">{fleetHealth}%</div>
+        </div>
+
+        <div className="kpi">
+          <div className="label">Environments</div>
+          <div className="value">{environments.length}</div>
+        </div>
+      </div>
+
+      {/* ---------------- RECENT HOSTS ---------------- */}
+      <div
+        className="card"
+        style={{ marginTop: "30px", padding: "20px" }}
+      >
+        <h3>Recently Seen Hosts</h3>
+
+        {hosts.length === 0 && (
+          <div style={{ opacity: 0.6, marginTop: "10px" }}>
+            No hosts connected
+          </div>
+        )}
+
+        {hosts.slice(0, 5).map((h) => (
+          <div
+            key={h.agent_id}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              padding: "8px 0",
+              borderBottom: "1px solid #1f2937",
+            }}
+          >
+            <div>
+              <strong>{h.hostname}</strong>
+              <div style={{ fontSize: 12, opacity: 0.6 }}>
+                {h.ip}
+              </div>
+            </div>
+
+            <div
+              style={{
+                color: h.alive ? "#22c55e" : "#ef4444",
+                fontWeight: 600,
+              }}
+            >
+              {h.alive ? "Active" : "Down"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/Alerts.tsx =====
+export default function Alerts() {
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Alerts</h2>
+      <p>No alerts configured yet.</p>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/Admin.tsx =====
+import { NavLink, Routes, Route } from "react-router-dom"
+
+
+export default function Admin() {
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Admin Panel</h2>
+
+      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
+        <h3>Tenants</h3>
+        <p>Tenant management UI coming soon.</p>
+      </div>
+
+      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
+        <h3>Users</h3>
+        <p>User management UI coming soon.</p>
+      </div>
+
+      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
+        <h3>Roles</h3>
+        <p>Role management UI coming soon.</p>
+      </div>
+    </div>
+  )
+}
+
+

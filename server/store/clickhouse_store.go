@@ -1,11 +1,8 @@
 package store
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"log"
 	"time"
 
@@ -43,65 +40,9 @@ func NewClickHouseStore(dsn string) (*ClickHouseStore, error) {
 }
 
 // -------------------------------
-// API Keys
-// -------------------------------
-func hashAPIKey(rawKey string) string {
-	sum := sha256.Sum256([]byte(rawKey))
-	return hex.EncodeToString(sum[:])
-}
-
-func (c *ClickHouseStore) CountAPIKeys() (int, error) {
-	row := c.db.QueryRow(`SELECT count() FROM api_keys`)
-	var count uint64
-	if err := row.Scan(&count); err != nil {
-		return 0, err
-	}
-	return int(count), nil
-}
-
-func (c *ClickHouseStore) InsertAPIKey(k shared.APIKey) error {
-	_, err := c.db.Exec(`
-		INSERT INTO api_keys
-		(account_id, key_id, key_hash, name, is_active, is_bootstrap, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`,
-		k.AccountID,
-		k.KeyID,
-		k.KeyHash,
-		k.Name,
-		k.IsActive,
-		k.IsBootstrap,
-		time.Now(),
-	)
-	return err
-}
-
-func (c *ClickHouseStore) ValidateAPIKey(rawKey string) (bool, error) {
-	hash := hashAPIKey(rawKey)
-	row := c.db.QueryRow(`
-		SELECT count()
-		FROM api_keys
-		WHERE key_hash = ?
-		  AND is_active = 1
-		LIMIT 1
-	`, hash)
-
-	var count uint64
-	if err := row.Scan(&count); err != nil {
-		return false, err
-	}
-	if count == 0 {
-		return false, errors.New("invalid or inactive api key")
-	}
-	return true, nil
-}
-
-// -------------------------------
 // Host Metrics (time-series ONLY)
 // -------------------------------
 func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
-	tagsJSON, _ := json.Marshal(m.Tags)
-
 	ttl := m.TTLDays
 	if ttl == 0 {
 		ttl = 90
@@ -118,14 +59,14 @@ func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
 
 	_, err := c.db.Exec(`
 		INSERT INTO metrics
-		(account_id, agent_id, hostname,
+		(tenant_id, agent_id, hostname,
 		 cpu_percent, mem_used_mb, mem_total_mb,
 		 disk_used_mb, disk_total_mb,
 		 network_in_mb, network_out_mb,
-		 uptime_sec, tags, ts, ttl_days)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 uptime_sec, ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		m.AccountID,
+		m.TenantID,
 		m.AgentID,
 		m.Hostname,
 		m.CPUPercent,
@@ -136,7 +77,6 @@ func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
 		m.NetworkInMB,
 		m.NetworkOutMB,
 		m.UptimeSec,
-		string(tagsJSON),
 		ts,
 		ttl,
 	)
@@ -148,7 +88,7 @@ func (c *ClickHouseStore) SaveMetrics(m shared.HostMetrics) error {
 // Logs Query
 // -------------------------------
 func (c *ClickHouseStore) GetLogs(
-	accountID string,
+	TenantID string,
 	hostname string,
 	agentID string,
 	from, to time.Time,
@@ -167,12 +107,11 @@ func (c *ClickHouseStore) GetLogs(
 			hostname,
 			timestamp,
 			level,
-			message,
-			tags
+			message
 		FROM logs
-		WHERE account_id = ?
+		WHERE tenant_id = ?
 	`
-	args := []any{accountID}
+	args := []any{TenantID}
 
 	if source != "" {
 		query += " AND JSONExtractString(tags, 'source') = ?"
@@ -213,7 +152,6 @@ func (c *ClickHouseStore) GetLogs(
 	for rows.Next() {
 		var le shared.LogEntry
 		var ts time.Time
-		var tagsJSON string
 
 		if err := rows.Scan(
 			&le.AgentID,
@@ -221,18 +159,13 @@ func (c *ClickHouseStore) GetLogs(
 			&ts,
 			&le.Level,
 			&le.Message,
-			&tagsJSON,
 		); err != nil {
 			continue
 		}
 
-		le.AccountID = accountID
+		le.TenantID = TenantID
 		le.Timestamp = ts.Unix()
 		le.HumanTime = ts.Format("2006-01-02 15:04:05")
-
-		if tagsJSON != "" && json.Valid([]byte(tagsJSON)) {
-			_ = json.Unmarshal([]byte(tagsJSON), &le.Tags)
-		}
 
 		logs = append(logs, le)
 	}
@@ -252,10 +185,10 @@ func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
 
 	_, err := c.db.Exec(`
 		INSERT INTO agents
-		(account_id, agent_id, hostname, ip, os, version, environment, tags)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, agent_id, hostname, ip, os, version, environment, tags, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		m.AccountID,
+		m.TenantID,
 		m.AgentID,
 		m.Hostname,
 		m.IP,
@@ -263,7 +196,9 @@ func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
 		m.Version,
 		m.Tags["env"],
 		string(tagsJSON),
+		time.Now(),
 	)
+
 	return err
 }
 
@@ -273,10 +208,10 @@ func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
 func (c *ClickHouseStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
 	_, err := c.db.Exec(`
 		INSERT INTO agent_heartbeats
-		(account_id, agent_id, last_seen)
+		(tenant_id, agent_id, last_seen)
 		VALUES (?, ?, ?)
 	`,
-		hb.AccountID,
+		hb.TenantID,
 		hb.AgentID,
 		hb.Timestamp,
 	)
@@ -286,10 +221,10 @@ func (c *ClickHouseStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
 // -------------------------------
 // Hosts Listing (JOIN + alive)
 // -------------------------------
-func (c *ClickHouseStore) ListAgents(accountID string) ([]shared.AgentInfo, error) {
+func (c *ClickHouseStore) ListAgents(TenantID string) ([]shared.AgentInfo, error) {
 	rows, err := c.db.Query(`
 		SELECT
-			a.account_id,
+			a.tenant_id,
 			a.agent_id,
 			any(a.hostname) AS hostname,
 			any(a.ip) AS ip,
@@ -301,11 +236,11 @@ func (c *ClickHouseStore) ListAgents(accountID string) ([]shared.AgentInfo, erro
 			max(h.last_seen) AS last_seen
 		FROM agents a
 		LEFT JOIN agent_heartbeats h
-		  ON a.account_id = h.account_id
+		  ON a.tenant_id = h.tenant_id
 		 AND a.agent_id = h.agent_id
-		WHERE a.account_id = ?
-		GROUP BY a.account_id, a.agent_id
-	`, accountID)
+		WHERE a.tenant_id = ?
+		GROUP BY a.tenant_id, a.agent_id
+	`, TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +252,7 @@ func (c *ClickHouseStore) ListAgents(accountID string) ([]shared.AgentInfo, erro
 		var tagsJSON string
 
 		if err := rows.Scan(
-			&ai.AccountID,
+			&ai.TenantID,
 			&ai.AgentID,
 			&ai.Hostname,
 			&ai.IP,
@@ -351,7 +286,7 @@ func (c *ClickHouseStore) InsertContainerLogs(batch shared.ContainerLogBatch) er
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO container_logs
-		(account_id, agent_id, hostname, container_id, name,
+		(tenant_id, agent_id, hostname, container_id, name,
 		 timestamp, level, message, tags, ttl_days)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
@@ -383,13 +318,13 @@ func (c *ClickHouseStore) InsertContainerLogs(batch shared.ContainerLogBatch) er
 		}
 		log.Printf(
 			"🧪 CH INSERT logs: account=%s agent=%s host=%s ts=%v",
-			batch.AccountID,
+			batch.TenantID,
 			batch.AgentID,
 			batch.Hostname,
 			ts,
 		)
 		_, err := stmt.Exec(
-			batch.AccountID,
+			batch.TenantID,
 			batch.AgentID,
 			batch.Hostname,
 			l.ContainerID,
@@ -420,8 +355,8 @@ func (c *ClickHouseStore) InsertLogs(batch shared.LogBatch) error {
 
 	stmt, err := tx.Prepare(`
 		INSERT INTO logs
-		(account_id, agent_id, hostname, timestamp, level, message, tags, ttl_days)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, agent_id, hostname, timestamp, level, message, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return err
@@ -443,21 +378,18 @@ func (c *ClickHouseStore) InsertLogs(batch shared.LogBatch) error {
 			level = "info"
 		}
 
-		tagsJSON, _ := json.Marshal(l.Tags)
-
 		ttl := l.TTLDays
 		if ttl == 0 {
 			ttl = 90
 		}
 
 		_, err := stmt.Exec(
-			batch.AccountID,
+			batch.TenantID,
 			batch.AgentID,
 			batch.Hostname,
 			ts,
 			level,
 			l.Message,
-			string(tagsJSON),
 			ttl,
 		)
 		if err != nil {
@@ -487,18 +419,15 @@ func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error 
 		ttl = 90
 	}
 
-	tagsJSON, _ := json.Marshal(m.Tags)
-
 	_, err := c.db.Exec(`
 		INSERT INTO container_metrics
-		(account_id, agent_id, container_id, name,
+		(tenant_id, agent_id, container_id, name,
 		 cpu_percent, mem_used_mb, mem_total_mb,
 		 disk_used_mb, disk_total_mb,
-		 network_in_mb, network_out_mb,
-		 tags, ts, ttl_days)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 network_in_mb, network_out_mb, ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		m.AccountID,
+		m.TenantID,
 		m.AgentID,
 		m.ContainerID,
 		m.ContainerName,
@@ -509,7 +438,6 @@ func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error 
 		m.DiskTotalMB,
 		m.NetworkInMB,
 		m.NetworkOutMB,
-		string(tagsJSON),
 		ts,
 		ttl,
 	)
@@ -517,7 +445,7 @@ func (c *ClickHouseStore) SaveContainerMetrics(m shared.ContainerMetrics) error 
 	return err
 }
 
-func (c *ClickHouseStore) GetLatestHostMetrics(accountID string) (map[string]shared.HostMetrics, error) {
+func (c *ClickHouseStore) GetLatestHostMetrics(TenantID string) (map[string]shared.HostMetrics, error) {
 	rows, err := c.db.Query(`
 		SELECT
 			agent_id,
@@ -527,9 +455,9 @@ func (c *ClickHouseStore) GetLatestHostMetrics(accountID string) (map[string]sha
 			argMax(mem_total_mb, ts),
 			argMax(uptime_sec, ts)
 		FROM metrics
-		WHERE account_id = ?
+		WHERE tenant_id = ?
 		GROUP BY agent_id, hostname
-	`, accountID)
+	`, TenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -556,16 +484,16 @@ func (c *ClickHouseStore) GetLatestHostMetrics(accountID string) (map[string]sha
 }
 
 func (c *ClickHouseStore) GetLogSources(
-	accountID, agentID string,
+	TenantID, agentID string,
 ) ([]string, error) {
 
 	rows, err := c.db.Query(`
 		SELECT DISTINCT JSONExtractString(tags, 'source')
 		FROM logs
-		WHERE account_id = ?
+		WHERE tenant_id = ?
 		  AND agent_id = ?
 		  AND JSONHas(tags, 'source')
-	`, accountID, agentID)
+	`, TenantID, agentID)
 	if err != nil {
 		return nil, err
 	}

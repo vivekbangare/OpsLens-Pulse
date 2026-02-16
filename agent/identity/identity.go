@@ -36,7 +36,10 @@ func LoadOrCreateAgentID() (string, error) {
 }
 
 func generateRandomID() string {
-	b := make([]byte, 8) // 128-bit ID
-	_, _ = rand.Read(b)
+	b := make([]byte, 16) // 128-bit ID
+	_, err := rand.Read(b)
+	if err != nil {
+		panic("crypto rand failed")
+	}
 	return "agt_" + hex.EncodeToString(b)
 }

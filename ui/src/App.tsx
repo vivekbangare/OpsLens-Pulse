@@ -1,53 +1,46 @@
-import { Routes, Route, Navigate } from "react-router-dom"
-import { useState, useEffect } from "react"
-import Login from "./pages/Login"
-import Hosts from "./pages/Hosts"
-import AppLayout from "./layout/AppLayout"
-import FleetOverview from "./pages/FleetOverview"
+import { Routes, Route, Navigate, useParams } from "react-router-dom"
+import { useAuth } from "./auth/AuthContext"
 
+import Login from "./pages/Login"
+import FleetOverview from "./pages/FleetOverview"
+import Hosts from "./pages/Hosts"
+import LogsExplorer from "./pages/LogsExplorer"
+import Alerts from "./pages/Alerts"
+import Admin from "./pages/Admin"
+import HostDetails from "./pages/HostDetails"
+import AppLayout from "./layout/AppLayout"
 
 export default function App() {
-  const [token, setToken] = useState<string | null>(null)
-
-  useEffect(() => {
-    setToken(sessionStorage.getItem("apiKey"))
-  }, [])
-
-  const handleLogin = (newToken: string) => {
-    sessionStorage.setItem("apiKey", newToken)
-    setToken(newToken)
-  }
-
-  const handleLogout = () => {
-    sessionStorage.removeItem("apiKey")
-    setToken(null)
-  }
+  const { token } = useAuth()
 
   return (
     <Routes>
-      <Route
-        path="/"
-        element={
-          token ? (
-            <Navigate to="/hosts" />
-          ) : (
-            <Login onLogin={handleLogin} />
-          )
-        }
-      />
-      <Route
-        path="/hosts"
-        element={
-          token ? (
-            <AppLayout>
-              <FleetOverview />
-            </AppLayout>
-          ) : (
-            <Navigate to="/" />
-          )
-        }
-      />
-      <Route path="*" element={<Navigate to="/" />} />
+      {/* ---------------- PUBLIC ---------------- */}
+      {!token && (
+        <Route path="*" element={<Login />} />
+      )}
+
+      {/* ---------------- PROTECTED ---------------- */}
+      {token && (
+        <Route path="/" element={<AppLayout />}>
+          <Route index element={<Navigate to="fleet" />} />
+          <Route path="fleet" element={<FleetOverview />} />
+          <Route path="hosts" element={<Hosts />} />
+          <Route path="hosts/:agentId" element={<HostDetailsWrapper />} />
+          <Route path="logs" element={<LogsExplorer />} />
+          <Route path="alerts" element={<Alerts />} />
+          <Route path="admin" element={<Admin />} />
+          <Route path="*" element={<Navigate to="fleet" />} />
+        </Route>
+      )}
     </Routes>
   )
+}
+
+function HostDetailsWrapper() {
+  const { agentId } = useParams()
+
+  if (!agentId) return null
+
+  return <HostDetails agentId={agentId} />
 }
