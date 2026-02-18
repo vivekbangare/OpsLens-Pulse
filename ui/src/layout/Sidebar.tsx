@@ -8,6 +8,13 @@ export default function Sidebar() {
   const currentTenant = tenants.find(
     (t) => t.id === user?.currentTenantId
   )
+  const hasPermission = (perm: string) =>
+    user?.permissions?.includes(perm) || false
+
+  const canViewAdmin = user?.is_super_admin
+    // user?.permissions?.includes("users.read") ||
+    // user?.permissions?.includes("roles.read") ||
+    // user?.permissions?.includes("groups.read") ||
 
   return (
     <aside className="sidebar">
@@ -19,15 +26,54 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* Navigation */}
       <nav className="nav">
-        <NavLink to="/fleet">⚡ Fleet Overview</NavLink>
-        <NavLink to="/hosts">🧩 Hosts</NavLink>
-        <NavLink to="/logs">🧾 Logs Explorer</NavLink>
-        <NavLink to="/alerts">🚨 Alerts</NavLink>
-        <NavLink to="/admin">🛡️ Admin</NavLink>
+        {/* Overview */}
+        <div className="navSection">
+          <p className="navTitle">Overview</p>
+          <NavLink to="/fleet">Fleet Overview</NavLink>
+        </div>
+
+        {/* Infrastructure */}
+        <div className="navSection">
+          <p className="navTitle">Infrastructure</p>
+          <NavLink to="/hosts">Hosts</NavLink>
+        </div>
+
+        {/* Observability */}
+        <div className="navSection">
+          <p className="navTitle">Observability</p>
+          <NavLink to="/logs">Log Explorer</NavLink>
+          <NavLink to="/alerts">Alerts</NavLink>
+        </div>
+
+        {/* Intelligence */}
+        <div className="navSection">
+          <p className="navTitle">Intelligence</p>
+          <NavLink to="/ai">AI Insights</NavLink>
+        </div>
+
+        {/* Administration */}
+        {canViewAdmin && (
+          <div className="navSection">
+            <p className="navTitle">Administration</p>
+
+            {user?.permissions?.includes("users.read") && (
+              <NavLink to="/admin/users">Users</NavLink>
+            )}
+
+            {user?.permissions?.includes("roles.read") && (
+              <NavLink to="/admin/roles">Roles</NavLink>
+            )}
+
+            {user?.permissions?.includes("groups.read") && (
+              <NavLink to="/admin/groups">Groups</NavLink>
+            )}
+          </div>
+        )}
       </nav>
 
-      {/* Tenant Footer */}
+      {/* Tenant Switch */}
       <div className="sidebarFooter">
         {tenants.length <= 1 ? (
           <div className="tenantName">
@@ -47,6 +93,7 @@ export default function Sidebar() {
           </select>
         )}
       </div>
+
     </aside>
   )
 }

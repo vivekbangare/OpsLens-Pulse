@@ -29,26 +29,20 @@ func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.H
 				return
 			}
 
-			tenantSlug := r.Header.Get("X-Tenant")
-			// if tenantSlug == "" {
-			// 	http.Error(w, "missing tenant", http.StatusBadRequest)
-			// 	return
-			// }
-
-			// If UI didn't send tenant → fallback to default
-			if tenantSlug == "" {
-				tenantSlug = "default-tenant"
+			tenantID := claims.TenantID
+			if tenantID == "" {
+				http.Error(w, "tenant missing in token", http.StatusUnauthorized)
+				return
 			}
 
-			var tenantID string
 			err = db.QueryRow(`
 				SELECT t.id
 				FROM tenants t
 				JOIN user_tenants ut ON ut.tenant_id = t.id
 				WHERE ut.user_id = $1
-				AND t.slug = $2
+				AND t.id = $2
 				AND t.is_active = true
-			`, claims.UserID, tenantSlug).Scan(&tenantID)
+			`, claims.UserID, tenantID).Scan(&tenantID)
 
 			if err == sql.ErrNoRows {
 				http.Error(w, "forbidden", http.StatusForbidden)

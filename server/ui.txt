@@ -31,9 +31,14 @@ func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.H
 			}
 
 			tenantSlug := r.Header.Get("X-Tenant")
+			// if tenantSlug == "" {
+			// 	http.Error(w, "missing tenant", http.StatusBadRequest)
+			// 	return
+			// }
+
+			// If UI didn't send tenant → fallback to default
 			if tenantSlug == "" {
-				http.Error(w, "missing tenant", http.StatusBadRequest)
-				return
+				tenantSlug = "default-tenant"
 			}
 
 			var tenantID string
@@ -46,8 +51,12 @@ func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.H
 				AND t.is_active = true
 			`, claims.UserID, tenantSlug).Scan(&tenantID)
 
-			if err != nil {
+			if err == sql.ErrNoRows {
 				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			if err != nil {
+				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
 
@@ -277,13 +286,27 @@ func NewJWTManager(secret string) *JWTManager {
 }
 
 type Claims struct {
-	UserID string `json:"user_id"`
+	UserID       string   `json:"user_id"`
+	Username     string   `json:"username"`
+	TenantID     string   `json:"tenant_id"`
+	Permissions  []string `json:"permissions"`
+	IsSuperAdmin bool     `json:"is_super_admin"`
 	jwt.RegisteredClaims
 }
 
-func (j *JWTManager) Generate(userID string) (string, error) {
+func (j *JWTManager) Generate(
+	userID string,
+	username string,
+	tenantID string,
+	permissions []string,
+	isSuperAdmin bool,
+) (string, error) {
 	claims := Claims{
-		UserID: userID,
+		UserID:       userID,
+		Username:     username,
+		TenantID:     tenantID,
+		Permissions:  permissions,
+		IsSuperAdmin: isSuperAdmin,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},
@@ -435,6 +458,7 @@ func MetricsHandler(store store.Store) http.HandlerFunc {
 
 		// 🔒 enforce tenant from auth
 		metrics.TenantID = tenantID
+		metrics.PublicIP = extractPublicIP(r)
 
 		if err := store.UpsertAgentMetadata(metrics); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -504,7 +528,13 @@ func LoginHandler(db *sql.DB, jwtManager *auth.JWTManager) http.HandlerFunc {
 			return
 		}
 
-		token, err := jwtManager.Generate(userID)
+		token, _ := jwtManager.Generate(
+			user.ID,
+			user.Username,
+			user.DefaultTenantID,
+			userPermissions, // []string from DB
+			user.IsSuperAdmin,
+		)
 		if err != nil {
 			http.Error(w, "failed to generate token", http.StatusInternalServerError)
 			return
@@ -521,7 +551,9 @@ package api
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
@@ -565,6 +597,22 @@ func HostSummaryHandler(st store.Store) http.HandlerFunc {
 	}
 }
 
+func extractPublicIP(r *http.Request) string {
+	// Check X-Forwarded-For (can contain multiple IPs)
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	// Fallback to RemoteAddr
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
+}
+
 ===== FILE: ./api/logs.go =====
 package api
 
@@ -572,6 +620,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"opslense-pulse/server/auth"
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
 	"opslense-pulse/shared"
@@ -702,6 +751,38 @@ func LogSourcesHandler(s store.Store) http.HandlerFunc {
 		}
 		json.NewEncoder(w).Encode(out)
 	}
+}
+
+func SearchLogs(chStore *store.ClickHouseStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req shared.LogSearchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		claims := r.Context().Value("claims").(*auth.Claims)
+		tenantID := claims.TenantID
+		if tenantID == "" {
+			http.Error(w, "missing tenant", http.StatusBadRequest)
+			return
+		}
+
+		results, err := chStore.SearchLogs(tenantID, req)
+		if err != nil {
+			http.Error(w, "query failed", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
+	})
 }
 
 ===== FILE: ./api/container.go =====
@@ -863,6 +944,46 @@ func HeartbeatHandler(st store.Store) http.HandlerFunc {
 	}
 }
 
+===== FILE: ./handlers/logs.go =====
+package handlers
+
+import (
+	"encoding/json"
+	"net/http"
+	"opslense-pulse/server/auth"
+	"opslense-pulse/server/store"
+	"opslense-pulse/shared"
+)
+
+type Handler struct {
+	Store *store.ClickHouseStore
+}
+
+func (h *Handler) SearchLogs(w http.ResponseWriter, r *http.Request) {
+	var req shared.LogSearchRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	claims := r.Context().Value("claims").(*auth.Claims)
+	tenantID := claims.TenantID
+	if tenantID == "" {
+		http.Error(w, "missing tenant", http.StatusBadRequest)
+		return
+	}
+
+	logs, err := h.Store.SearchLogs(tenantID, req)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(logs)
+}
+
 ===== FILE: ./main.go =====
 package main
 
@@ -889,6 +1010,7 @@ import (
 	"opslense-pulse/server/auth"
 	"opslense-pulse/server/config"
 	"opslense-pulse/server/db"
+	"opslense-pulse/server/handlers"
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
 	"opslense-pulse/shared"
@@ -1098,6 +1220,17 @@ func main() {
 		middleware.UserAuth(jwtManager, pg)(
 			middleware.RequirePermission("logs.read")(
 				api.ContainerLogsHandler(chStore),
+			),
+		),
+	)
+	logHandler := &handlers.Handler{
+		Store: chStore,
+	}
+
+	mux.Handle("/api/logs/search",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("logs.read")(
+				http.HandlerFunc(logHandler.SearchLogs),
 			),
 		),
 	)
@@ -1661,9 +1794,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
-	"time"
-
 	"opslense-pulse/shared"
+	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -1764,8 +1896,7 @@ func (c *ClickHouseStore) GetLogs(
 			hostname,
 			timestamp,
 			level,
-			message,
-			tags
+			message
 		FROM logs
 		WHERE tenant_id = ?
 	`
@@ -1810,7 +1941,6 @@ func (c *ClickHouseStore) GetLogs(
 	for rows.Next() {
 		var le shared.LogEntry
 		var ts time.Time
-		var tagsJSON string
 
 		if err := rows.Scan(
 			&le.AgentID,
@@ -1818,7 +1948,6 @@ func (c *ClickHouseStore) GetLogs(
 			&ts,
 			&le.Level,
 			&le.Message,
-			&tagsJSON,
 		); err != nil {
 			continue
 		}
@@ -1826,10 +1955,6 @@ func (c *ClickHouseStore) GetLogs(
 		le.TenantID = TenantID
 		le.Timestamp = ts.Unix()
 		le.HumanTime = ts.Format("2006-01-02 15:04:05")
-
-		if tagsJSON != "" && json.Valid([]byte(tagsJSON)) {
-			_ = json.Unmarshal([]byte(tagsJSON), &le.Tags)
-		}
 
 		logs = append(logs, le)
 	}
@@ -1849,13 +1974,14 @@ func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
 
 	_, err := c.db.Exec(`
 		INSERT INTO agents
-		(tenant_id, agent_id, hostname, ip, os, version, environment, tags, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, agent_id, hostname, ip, public_ip, os, version, environment, tags, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.TenantID,
 		m.AgentID,
 		m.Hostname,
 		m.IP,
+		m.PublicIP,
 		m.OS,
 		m.Version,
 		m.Tags["env"],
@@ -2171,6 +2297,95 @@ func (c *ClickHouseStore) GetLogSources(
 		}
 	}
 	return sources, nil
+}
+
+func (c *ClickHouseStore) SearchLogs(
+	tenantID string,
+	req shared.LogSearchRequest,
+) ([]map[string]interface{}, error) {
+
+	fromTime, err := time.Parse(time.RFC3339, req.From)
+	if err != nil {
+		return nil, err
+	}
+
+	toTime, err := time.Parse(time.RFC3339, req.To)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+        SELECT tenant_id, agent_id, source_name, source_type,
+               ts, level, message
+        FROM unified_logs
+        WHERE tenant_id = ?
+          AND ts BETWEEN ? AND ?
+    `
+
+	args := []interface{}{tenantID, fromTime, toTime}
+
+	if req.Level != "" {
+		query += " AND level = ?"
+		args = append(args, req.Level)
+	}
+
+	if req.Source != "" {
+		query += " AND source_type = ?"
+		args = append(args, req.Source)
+	}
+
+	if req.Query != "" {
+		query += " AND message ILIKE ?"
+		args = append(args, "%"+req.Query+"%")
+	}
+
+	query += " ORDER BY ts DESC"
+
+	if req.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, req.Limit)
+	} else {
+		query += " LIMIT 500"
+	}
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+
+	for rows.Next() {
+		var tenantID, agentID, sourceName, sourceType string
+		var ts time.Time
+		var level, message string
+
+		err := rows.Scan(
+			&tenantID,
+			&agentID,
+			&sourceName,
+			&sourceType,
+			&ts,
+			&level,
+			&message,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, map[string]interface{}{
+			"tenant_id":   tenantID,
+			"agent_id":    agentID,
+			"source_name": sourceName,
+			"source_type": sourceType,
+			"ts":          ts.Unix(),
+			"level":       level,
+			"message":     message,
+		})
+	}
+
+	return results, nil
 }
 
 // -------------------------------

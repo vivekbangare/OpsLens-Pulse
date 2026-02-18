@@ -23,7 +23,7 @@ import { useAuth } from "./auth/AuthContext"
 import Login from "./pages/Login"
 import FleetOverview from "./pages/FleetOverview"
 import Hosts from "./pages/Hosts"
-import LogsExplorer from "./pages/LogsExplorer"
+import LogsExplorer from "./pages/logs/LogsExplorer"
 import Alerts from "./pages/Alerts"
 import Admin from "./pages/Admin"
 import HostDetails from "./pages/HostDetails"
@@ -91,11 +91,20 @@ import {
   ReactNode,
 } from "react"
 
-interface User {
+export interface Tenant {
+  id: string
+  name: string
+  slug: string
+}
+
+export interface User {
   id: string
   username: string
   email: string
   is_super_admin?: boolean
+  currentTenantId?: string
+  tenants?: Tenant[]
+  permissions?: string[]
 }
 
 interface AuthContextType {
@@ -103,6 +112,7 @@ interface AuthContextType {
   user: User | null
   login: (data: { token: string; user: User }) => void
   logout: () => void
+  updateTenant: (tenantId: string) => void
   isAuthenticated: boolean
 }
 
@@ -146,6 +156,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // LOGIN
   // -----------------------------
   function login(data: { token: string; user: User }) {
+    console.log("Login User:", data.user)
+
+    if (!data.user){
+      console.error("Login failed: No user data received")
+      return  
+    }
+
     sessionStorage.setItem("token", data.token)
     sessionStorage.setItem("user", JSON.stringify(data.user))
 
@@ -164,11 +181,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }
 
+  // -----------------------------
+  // UPDATE TENANT
+  // -----------------------------
+  function updateTenant(tenantId: string) {
+    if (!user) return
+
+    const updatedUser = {
+      ...user,
+      currentTenantId: tenantId,
+    }
+
+    sessionStorage.setItem("user", JSON.stringify(updatedUser))
+    setUser(updatedUser)
+  }
+
   const value: AuthContextType = {
     token,
     user,
     login,
     logout,
+    updateTenant,
     isAuthenticated: !!token,
   }
 
@@ -188,32 +221,58 @@ export function useAuth(): AuthContextType {
 }
 
 ===== FILE: ./src/layout/Topbar.tsx =====
+import { useState } from "react"
 import { useAuth } from "../auth/AuthContext"
 
-export default function Topbar() {
-  const { logout, user } = useAuth()
+export default function TopBar() {
+  const { user, logout } = useAuth()
+  const [open, setOpen] = useState(false)
 
   return (
     <div className="topbar">
-      <div className="search">
-        <span style={{ opacity: 0.75 }}>🔎</span>
-        <input placeholder="Search host, IP, tag, container…" />
-        <span className="kbd">⌘ K</span>
+
+      {/* LEFT */}
+      <div className="topbarLeft">
+        <div className="search">
+          <input placeholder="Search hosts, logs..." />
+          <span className="kbd">⌘ K</span>
+        </div>
       </div>
 
+      {/* RIGHT */}
       <div className="topbarRight">
-        <div className="topbar-right">
-          <span className="badge">
-            {user?.username}
-          </span>
 
-          <button
-            className="btn"
-            onClick={logout}
-          >
-            Logout
-          </button>
+        {/* Notification */}
+        <div className="notification">🔔</div>
+
+        {/* User Dropdown */}
+        <div className="userWrapper" onClick={() => setOpen(!open)}>
+          <div className="avatar">
+            {user?.username?.charAt(0).toUpperCase()}
+          </div>
+
+          <span className="username">{user?.username}</span>
+
+          {open && (
+            <div className="dropdown">
+
+              <div className="dropdownItem">Profile</div>
+              <div className="dropdownItem">Settings</div>
+              <div className="dropdownSub">
+                <div className="dropdownItem">API Tokens</div>
+                <div className="dropdownItem">Change Password</div>
+              </div>
+
+              <div className="divider"></div>
+
+              <div className="dropdownItem logout" onClick={logout}>
+                Logout
+              </div>
+
+            </div>
+          )}
         </div>
+
       </div>
     </div>
   )
@@ -243,7 +302,19 @@ import { NavLink } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext"
 
 export default function Sidebar() {
-  const { user, logout } = useAuth()
+  const { user, updateTenant } = useAuth()
+
+  const tenants = user?.tenants || []
+  const currentTenant = tenants.find(
+    (t) => t.id === user?.currentTenantId
+  )
+  const hasPermission = (perm: string) =>
+    user?.permissions?.includes(perm) || false
+
+  const canViewAdmin = user?.is_super_admin
+    // user?.permissions?.includes("users.read") ||
+    // user?.permissions?.includes("roles.read") ||
+    // user?.permissions?.includes("groups.read") ||
 
   return (
     <aside className="sidebar">
@@ -255,37 +326,77 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* Navigation */}
       <nav className="nav">
-        <NavLink to="/fleet">⚡ Fleet Overview</NavLink>
-        <NavLink to="/hosts">🧩 Hosts</NavLink>
-        <NavLink to="/logs">🧾 Logs Explorer</NavLink>
-        <NavLink to="/alerts">🚨 Alerts</NavLink>
-        <NavLink to="/admin">🛡️ Admin</NavLink>
+        {/* Overview */}
+        <div className="navSection">
+          <p className="navTitle">Overview</p>
+          <NavLink to="/fleet">Fleet Overview</NavLink>
+        </div>
+
+        {/* Infrastructure */}
+        <div className="navSection">
+          <p className="navTitle">Infrastructure</p>
+          <NavLink to="/hosts">Hosts</NavLink>
+        </div>
+
+        {/* Observability */}
+        <div className="navSection">
+          <p className="navTitle">Observability</p>
+          <NavLink to="/logs/components">Log Explorer</NavLink>
+          <NavLink to="/alerts">Alerts</NavLink>
+        </div>
+
+        {/* Intelligence */}
+        <div className="navSection">
+          <p className="navTitle">Intelligence</p>
+          <NavLink to="/ai">AI Insights</NavLink>
+        </div>
+
+        {/* Administration */}
+        {canViewAdmin && (
+          <div className="navSection">
+            <p className="navTitle">Administration</p>
+
+            {user?.permissions?.includes("users.read") && (
+              <NavLink to="/admin/users">Users</NavLink>
+            )}
+
+            {user?.permissions?.includes("roles.read") && (
+              <NavLink to="/admin/roles">Roles</NavLink>
+            )}
+
+            {user?.permissions?.includes("groups.read") && (
+              <NavLink to="/admin/groups">Groups</NavLink>
+            )}
+          </div>
+        )}
       </nav>
 
+      {/* Tenant Switch */}
       <div className="sidebarFooter">
-        <div className="tenant">
-          <div className="row">
-            <div>
-              <div className="label">Signed in</div>
-              <div className="value">
-                {user?.username}
-              </div>
-            </div>
-
-            <button
-              className="btn secondary"
-              onClick={logout}
-            >
-              Logout
-            </button>
+        {tenants.length <= 1 ? (
+          <div className="tenantName">
+            {currentTenant?.name || "Default Tenant"}
           </div>
-        </div>
+        ) : (
+          <select
+            className="tenantSelect"
+            value={user?.currentTenantId}
+            onChange={(e) => updateTenant(e.target.value)}
+          >
+            {tenants.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
+
     </aside>
   )
 }
-
 ===== FILE: ./src/components/Tabs.tsx =====
 
 ===== FILE: ./src/components/MiniChart.tsx =====
@@ -714,17 +825,38 @@ export default class ErrorBoundary extends React.Component<
 // API CLIENT (Production Safe)
 // -------------------------------
 
+import { data } from "react-router-dom"
+import { User } from "../auth/AuthContext"
+
+function safeParse<T>(value: string | null): T | null {
+  if (!value || value === "undefined" || value === "null") {
+    return null
+  }
+
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
+  }
+}
+
 function getHeaders(): HeadersInit {
-  const token = sessionStorage.getItem("token")
+  const token = 
+    sessionStorage.getItem("token") || localStorage.getItem("token")
+
+    const user = safeParse<User>(
+      sessionStorage.getItem("user") || localStorage.getItem("user")
+    ) 
+
 
   if (!token) return {}
 
   return {
-    Authorization: "Bearer " + token,
+    Authorization: token ? "Bearer " + token : "",
+    "X-Tenant-ID": user?.currentTenantId || "",
     "Content-Type": "application/json",
   }
 }
-
 
 async function safeFetch(url: string) {
   try {
@@ -759,11 +891,30 @@ export async function fetchHosts(): Promise<any[]> {
 // -------------------------------
 
 export async function fetchHostSummary(agentId: string) {
-  const data = await safeFetch("/api/hosts/summary")
+  try {
+    const res = await fetch("/api/hosts/summary", {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify({
+        agent_id: agentId,
+      }),
+    })
 
-  if (!data || typeof data !== "object") return null
+    if (!res.ok) {
+      console.warn(`API error: ${res.status} → host summary`)
+      return null
+    }
+    const data = await res.json()
 
-  return data[agentId] ?? null
+    if (data && data[agentId]) {
+      return data[agentId]
+    }
+
+    return null
+  } catch (err) {
+    console.error("Host summary error:", err)
+    return null
+  }
 }
 
 // -------------------------------
@@ -831,19 +982,44 @@ import { useNavigate } from "react-router-dom"
 import {
   fetchLogs,
   fetchHostSummary,
+  fetchHosts,
   fetchContainerMetrics,
 } from "../api/client"
-
-const navigate = useNavigate()
 
 interface Props {
   agentId: string
 }
 
+type Tags = Record<string, string>
+
+interface HostSummary {
+  cpu_percent?: number
+  mem_used_mb?: number
+  mem_total_mb?: number
+  disk_used_mb?: number
+  network_in_mb?: number
+  network_out_mb?: number
+  uptime_sec?: number
+  tags?: Tags
+}
+
+interface LogEntry {
+  timestamp?: number
+  level?: string
+  message?: string
+}
+
+interface ContainerMetric {
+  name: string
+  status: string
+}
+
 export default function HostDetails({ agentId }: Props) {
-  const [logs, setLogs] = useState<any[]>([])
-  const [summary, setSummary] = useState<any>(null)
-  const [containers, setContainers] = useState<any[]>([])
+  const navigate = useNavigate()
+
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [summary, setSummary] = useState<HostSummary | null>(null)
+  const [containers, setContainers] = useState<ContainerMetric[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -860,27 +1036,41 @@ export default function HostDetails({ agentId }: Props) {
     setLoading(true)
 
     try {
-    const [logData, summaryData, containerData] =
-      await Promise.all([
-        fetchLogs(agentId),
-        fetchHostSummary(agentId),
-        fetchContainerMetrics(agentId),
-      ])
+      const [summaryData, logData, containerData, hostsData] =
+        await Promise.all([
+          fetchHostSummary(agentId),
+          fetchLogs(agentId),
+          fetchContainerMetrics(agentId).catch(() => []),
+          fetchHosts(), // 👈 reuse this
+        ])
 
+      const currentHost = hostsData.find(
+        (h: any) => h.agent_id === agentId
+      )
 
-    console.log("LOGS:", logData)
-    console.log("SUMMARY:", summaryData)
-    
-    console.log("CONTAINERS:", containerData)
+      if (summaryData) {
+        summaryData.tags = currentHost?.tags ?? null
+      }
 
-      setLogs(Array.isArray(logData) ? logData : [])
       setSummary(summaryData ?? null)
+      setLogs(Array.isArray(logData) ? logData : [])
       setContainers(Array.isArray(containerData) ? containerData : [])
+
     } catch (err) {
-      console.error("Failed to load host data:", err)
+      console.error("Unexpected error:", err)
     } finally {
       setLoading(false)
     }
+  }
+
+  function formatUptime(seconds?: number) {
+    if (!seconds) return "—"
+
+    const hours = Math.floor(seconds / 3600)
+    const days = Math.floor(hours / 24)
+
+    if (days > 0) return `${days}d ${hours % 24}h`
+    return `${hours}h`
   }
 
   return (
@@ -902,10 +1092,20 @@ export default function HostDetails({ agentId }: Props) {
       >
         <h3>Key Metrics (1h)</h3>
 
-        <div style={{ display: "flex", gap: "30px", flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: "30px",
+            flexWrap: "wrap",
+            marginTop: "10px",
+          }}
+        >
           <div>
             <strong>CPU:</strong>{" "}
-            {summary?.cpu_percent?.toFixed(2) ?? "—"} %
+            {summary?.cpu_percent !== undefined
+              ? summary.cpu_percent.toFixed(2)
+              : "—"}{" "}
+            %
           </div>
 
           <div>
@@ -931,31 +1131,37 @@ export default function HostDetails({ agentId }: Props) {
 
           <div>
             <strong>Uptime:</strong>{" "}
-            {summary?.uptime_sec
-              ? Math.floor(summary.uptime_sec / 3600) + "h"
-              : "—"}
+            {formatUptime(summary?.uptime_sec)}
           </div>
         </div>
 
-        {/* TAGS */}
-        <div style={{ marginTop: "15px" }}>
+        {/* ================= TAGS ================= */}
+        <div style={{ marginTop: "20px" }}>
           <strong>Tags:</strong>
 
-          <div style={{ marginTop: "6px" }}>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+              gap: "8px",
+              marginTop: "10px",
+            }}
+          >
             {summary?.tags && Object.keys(summary.tags).length > 0 ? (
-              Object.entries(summary.tags).map(([k, v]) => (
-                <span
-                  key={k}
+              Object.entries(summary.tags).map(([key, value]) => (
+                <div
+                  key={key}
                   style={{
-                    marginRight: "6px",
-                    padding: "4px 8px",
+                    padding: "8px 12px",
                     background: "#1f2937",
-                    borderRadius: "6px",
-                    fontSize: "12px",
+                    borderRadius: "8px",
+                    border: "1px solid #374151",
+                    fontSize: "13px",
                   }}
                 >
-                  {k}: {String(v)}
-                </span>
+                  <strong style={{ opacity: 0.7 }}>{key}:</strong>{" "}
+                  {value}
+                </div>
               ))
             ) : (
               <span style={{ opacity: 0.6 }}>No tags</span>
@@ -983,6 +1189,7 @@ export default function HostDetails({ agentId }: Props) {
             overflowY: "auto",
             fontFamily: "monospace",
             fontSize: "13px",
+            marginTop: "10px",
           }}
         >
           {logs.map((l, i) => (
@@ -1017,14 +1224,23 @@ export default function HostDetails({ agentId }: Props) {
     </div>
   )
 }
-
 ===== FILE: ./src/pages/Hosts.tsx =====
 import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { fetchHosts } from "../api/client"
 
+type Host = {
+  agent_id: string
+  alive: boolean
+  hostname: string
+  ip: string
+  os?: string
+  last_seen?: string
+  tags?: Record<string, string>
+}
+
 export default function Hosts() {
-  const [hosts, setHosts] = useState<any[]>([])
+  const [hosts, setHosts] = useState<Host[]>([])
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
@@ -1053,72 +1269,127 @@ export default function Hosts() {
               <th>Status</th>
               <th>Host</th>
               <th>OS</th>
+              <th>Tags</th>
               <th>Last Seen</th>
             </tr>
           </thead>
 
           <tbody>
-            {hosts.map((h) => (
-              <tr
-                key={h.agent_id}
-                className="row"
-                onClick={() => navigate(`/hosts/${h.agent_id}`)}
-                style={{ cursor: "pointer" }}
-              >
-                <td>
-                  <span className="status">
-                    <span
-                      className={`dot ${h.alive ? "good" : "bad"}`}
-                    ></span>
-                    {h.alive ? "Active" : "Dead"}
-                  </span>
-                </td>
+            {hosts.map((h) => {
+              const tagsArray = Object.entries(h.tags || {})
 
-                <td>
-                  <b>{h.hostname}</b>
-                  <div style={{ fontSize: 12, opacity: 0.6 }}>
-                    {h.ip}
-                  </div>
-                </td>
+              return (
+                <tr
+                  key={h.agent_id}
+                  className="row"
+                  onClick={() => navigate(`/hosts/${h.agent_id}`)}
+                  style={{ cursor: "pointer" }}
+                >
+                  {/* Status */}
+                  <td>
+                    <span className="status">
+                      <span
+                        className={`dot ${h.alive ? "good" : "bad"}`}
+                      ></span>
+                      {h.alive ? "Active" : "Dead"}
+                    </span>
+                  </td>
 
-                <td>{h.os || "—"}</td>
+                  {/* Hostname + IP */}
+                  <td>
+                    <b>{h.hostname}</b>
+                    <div style={{ fontSize: 12, opacity: 0.6 }}>
+                      {h.ip}
+                    </div>
+                  </td>
 
-                <td>
-                  {h.last_seen
-                    ? new Date(h.last_seen).toLocaleString()
-                    : "—"}
-                </td>
-              </tr>
-            ))}
+                  {/* OS */}
+                  <td>{h.os || "—"}</td>
+
+                  {/* Tags */}
+                  <td style={{ position: "relative" }}>
+                    {tagsArray.length > 0 ? (
+                      <>
+                        {tagsArray.slice(0, 3).map(([key, value]) => (
+                          <span
+                            key={key}
+                            style={{
+                              marginRight: "6px",
+                              padding: "4px 8px",
+                              background: "#1f2937",
+                              borderRadius: "6px",
+                              fontSize: "12px",
+                            }}
+                          >
+                            {key}: {value}
+                          </span>
+                        ))}
+
+                        {tagsArray.length > 3 && (
+                          <span
+                            style={{
+                              marginRight: "6px",
+                              padding: "4px 8px",
+                              background: "#374151",
+                              borderRadius: "6px",
+                              fontSize: "12px",
+                              cursor: "pointer",
+                            }}
+                            className="more-tags"
+                            onClick={(e) => e.stopPropagation()} // prevent row click
+                          >
+                            +{tagsArray.length - 3} more
+
+                            <div className="tooltip">
+                              {tagsArray.slice(3).map(([key, value]) => (
+                                <div key={key} style={{ marginBottom: "4px" }}>
+                                  {key}: {value}
+                                </div>
+                              ))}
+                            </div>
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span style={{ opacity: 0.6 }}>No tags</span>
+                    )}
+                  </td>
+
+                  {/* Last Seen */}
+                  <td>
+                    {h.last_seen
+                      ? new Date(h.last_seen).toLocaleString()
+                      : "—"}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
     </div>
   )
 }
-
-===== FILE: ./src/pages/LogsExplorer.tsx =====
-export default function LogsExplorer() {
-  return (
-    <div style={{ padding: "20px" }}>
-      <h2>Logs Explorer</h2>
-      <p>Advanced log search coming soon...</p>
-    </div>
-  )
-}
-
 ===== FILE: ./src/pages/Login.tsx =====
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext"
 
-interface LoginResponse {
-  token: string
-  user: {
-    id: string
-    username: string
-    email: string
-    is_super_admin?: boolean
+function parseJwt(token: string) {
+  try {
+    const base64Url = token.split(".")[1]
+    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/")
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((c) =>
+          "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)
+        )
+        .join("")
+    )
+    return JSON.parse(jsonPayload)
+  } catch {
+    return null
   }
 }
 
@@ -1148,16 +1419,40 @@ export default function Login() {
         throw new Error("Invalid credentials")
       }
 
-      const data: LoginResponse = await res.json()
+      const data = await res.json()
+
+      if (!data.token) {
+        throw new Error("Token missing in response")
+      }
+
+      // 🔥 Decode token
+      const payload = parseJwt(data.token)
+      console.log("JWT PAYLOAD:", payload)
+
+      if (!payload) {
+        throw new Error("Invalid token payload")
+      }
 
       login({
         token: data.token,
-        user: data.user,
+        user: {
+          id: payload.sub || "1",
+          username: payload.username || payload.sub || "admin",
+          email: payload.email || "",
+          is_super_admin: payload.is_super_admin || false,
+          tenants: payload.tenants || [],
+          currentTenantId:
+            payload.currentTenantId ||
+            payload.current_tenant_id ||
+            payload.tenants?.[0]?.id ||
+            null,
+        },
       })
 
       navigate("/fleet")
     } catch (err: any) {
-      setError(err.message)
+      console.error("LOGIN ERROR:", err)
+      setError(err.message || "Login failed")
     } finally {
       setLoading(false)
     }
@@ -1166,7 +1461,10 @@ export default function Login() {
   return (
     <div className="login-page-wrapper">
       <div className="login-container">
-        <h1>OpsLens Pulse</h1>
+        <h1>OpsLens</h1>
+        <p style={{ opacity: 0.7, marginBottom: "20px" }}>
+          Sign in to continue
+        </p>
 
         <form onSubmit={handleSubmit}>
           <input
@@ -1174,6 +1472,7 @@ export default function Login() {
             placeholder="Username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            required
           />
 
           <input
@@ -1181,6 +1480,7 @@ export default function Login() {
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            required
           />
 
           <button type="submit" disabled={loading}>
@@ -1188,12 +1488,15 @@ export default function Login() {
           </button>
         </form>
 
-        {error && <div className="error">{error}</div>}
+        {error && (
+          <div style={{ marginTop: "14px", color: "#FF4D6D" }}>
+            {error}
+          </div>
+        )}
       </div>
     </div>
   )
 }
-
 ===== FILE: ./src/pages/FleetOverview.tsx =====
 import { useEffect, useState } from "react"
 import { fetchHosts } from "../api/client"
@@ -1312,6 +1615,160 @@ export default function Alerts() {
     <div style={{ padding: "20px" }}>
       <h2>Alerts</h2>
       <p>No alerts configured yet.</p>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/logs/LogsExplorer.tsx =====
+import { useState } from "react"
+import LogsToolbar from "./components/LogsToolbar"
+import LogsTimeline from "./components/LogsTimeline"
+import LogsTable from "./components/LogsTable"
+import LogDetailsDrawer from "./components/LogDetailsDrawer"
+
+export default function LogsExplorer() {
+  const [selectedLog, setSelectedLog] = useState<any>(null)
+
+  return (
+    <div className="logsPage">
+      
+      <LogsToolbar />
+
+      <LogsTimeline />
+
+      <div className="logsContent">
+        <LogsTable onSelect={setSelectedLog} />
+        {selectedLog && (
+          <LogDetailsDrawer
+            log={selectedLog}
+            onClose={() => setSelectedLog(null)}
+          />
+        )}
+      </div>
+
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/logs/components/LogDetailsDrawer.tsx =====
+export default function LogDetailsDrawer({ log, onClose }: any) {
+  return (
+    <div className="logDrawer">
+      <div className="drawerHeader">
+        <h3>Log Details</h3>
+        <button onClick={onClose}>Close</button>
+      </div>
+
+      <pre>{JSON.stringify(log, null, 2)}</pre>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/logs/components/LogsTable.tsx =====
+import LogRow from "./LogRow"
+
+interface LogsTableProps {
+  onSelect: (log: any) => void
+}
+
+export default function LogsTable({ onSelect }: LogsTableProps) {
+
+  const dummyLogs = [
+    {
+      ts: "12:03:22",
+      level: "ERROR",
+      source: "host-1",
+      message: "Disk quota exceeded"
+    },
+    {
+      ts: "12:05:10",
+      level: "WARN",
+      source: "container-api",
+      message: "High memory usage detected"
+    }
+  ]
+
+  return (
+    <div className="logsTable">
+      {dummyLogs.map((log, i) => (
+        <LogRow
+          key={i}
+          log={log}
+          onClick={() => onSelect(log)}
+        />
+      ))}
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/logs/components/LogsTimeline.tsx =====
+export default function LogsTimeline() {
+  return (
+    <div className="logsTimeline">
+      <h4>Log Volume</h4>
+      <div className="bars">
+        {/* Later render dynamic bars */}
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/logs/components/LogRow.tsx =====
+interface LogRowProps {
+  log: {
+    ts: string
+    level: string
+    source: string
+    message: string
+  }
+  onClick: () => void
+}
+
+export default function LogRow({ log, onClick }: LogRowProps) {
+  return (
+    <div
+      className={`logRow ${log.level.toLowerCase()}`}
+      onClick={onClick}
+    >
+      <span className="ts">{log.ts}</span>
+      <span className="level">{log.level}</span>
+      <span className="source">{log.source}</span>
+      <span className="msg">{log.message}</span>
+    </div>
+  )
+}
+
+===== FILE: ./src/pages/logs/components/LogsToolbar.tsx =====
+export default function LogsToolbar() {
+  return (
+    <div className="logsToolbar">
+
+      <div className="leftFilters">
+        <select>
+          <option>Last 15 min</option>
+          <option>Last 1 hour</option>
+          <option>Last 24 hours</option>
+        </select>
+
+        <select>
+          <option>All Levels</option>
+          <option>INFO</option>
+          <option>WARN</option>
+          <option>ERROR</option>
+        </select>
+
+        <select>
+          <option>All Sources</option>
+          <option>Hosts</option>
+          <option>Containers</option>
+        </select>
+      </div>
+
+      <div className="rightActions">
+        <input placeholder="Search logs..." />
+        <button className="btn secondary">Live</button>
+      </div>
+
     </div>
   )
 }

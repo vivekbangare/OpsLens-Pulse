@@ -11,6 +11,7 @@ type HostMetrics struct {
 	Hostname     string            `json:"hostname"`  // host name
 	OS           string            `json:"os"`        // add this
 	IP           string            `json:"ip"`
+	PublicIP     string            `json:"public_ip"` // add this
 	Version      string            `json:"version"`
 	Cores        int               `json:"cores"`
 	CPUPercent   float32           `json:"cpu_percent"`    // CPU usage %
@@ -72,6 +73,7 @@ type AgentInfo struct {
 	AgentID     string            `json:"agent_id"`
 	Hostname    string            `json:"hostname"`
 	IP          string            `json:"ip"`
+	PublicIP    string            `json:"public_ip"`
 	OS          string            `json:"os"`
 	Version     string            `json:"version"`
 	Environment string            `json:"environment"`
@@ -138,4 +140,14 @@ type ContainerLogEntry struct {
 	ContainerID string `json:"container_id"`
 	Timestamp   int64  `json:"timestamp"`
 	Message     string `json:"message"`
+}
+
+type LogSearchRequest struct {
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Level  string `json:"level"`
+	Source string `json:"source"` // host | container
+	Query  string `json:"query"`
+	Limit  int    `json:"limit"`
+	Offset int    `json:"offset"`
 }

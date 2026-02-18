@@ -151,3 +151,37 @@ export async function fetchContainerLogs(agentId: string): Promise<any[]> {
 
   return Array.isArray(data) ? data : []
 }
+
+
+interface LogSearchParams {
+  from?: string
+  to?: string
+  query?: string
+  level?: string
+  source?: string
+  limit?: number
+  offset?: number
+}
+
+export async function searchLogs(
+  params: LogSearchParams
+): Promise<any[]> {
+  try {
+    const res = await fetch("/api/logs/search", {
+      method: "POST",
+      headers: getHeaders(),
+      body: JSON.stringify(params),
+    })
+
+    if (!res.ok) {
+      console.warn(`API error: ${res.status} → log search`)
+      return []
+    }
+
+    const data = await res.json()
+    return Array.isArray(data) ? data : []
+  } catch (err) {
+    console.error("Log search error:", err)
+    return []
+  }
+}

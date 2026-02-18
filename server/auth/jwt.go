@@ -18,13 +18,27 @@ func NewJWTManager(secret string) *JWTManager {
 }
 
 type Claims struct {
-	UserID string `json:"user_id"`
+	UserID       string   `json:"user_id"`
+	Username     string   `json:"username"`
+	TenantID     string   `json:"tenant_id"`
+	Permissions  []string `json:"permissions"`
+	IsSuperAdmin bool     `json:"is_super_admin"`
 	jwt.RegisteredClaims
 }
 
-func (j *JWTManager) Generate(userID string) (string, error) {
+func (j *JWTManager) Generate(
+	userID string,
+	username string,
+	tenantID string,
+	permissions []string,
+	isSuperAdmin bool,
+) (string, error) {
 	claims := Claims{
-		UserID: userID,
+		UserID:       userID,
+		Username:     username,
+		TenantID:     tenantID,
+		Permissions:  permissions,
+		IsSuperAdmin: isSuperAdmin,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},

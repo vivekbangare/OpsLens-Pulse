@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS agents
     agent_id String,
     hostname LowCardinality(String),
     ip String,
+    public_ip String,
     os LowCardinality(String),
     version String,
     environment LowCardinality(String),
@@ -249,3 +250,30 @@ ENGINE = MergeTree()
 PARTITION BY toYYYYMM(ts)
 ORDER BY (tenant_id, agent_id, container_id, ts)
 TTL ts + toIntervalDay(ttl_days);
+
+-- =========================================================
+-- Unified View for Logs (Host + Container)
+-- =========================================================
+
+CREATE VIEW unified_logs AS
+SELECT
+    tenant_id,
+    agent_id,
+    hostname AS source_name,
+    'host' AS source_type,
+    timestamp AS ts,
+    level,
+    message
+FROM logs
+
+UNION ALL
+
+SELECT
+    tenant_id,
+    agent_id,
+    name AS source_name,
+    'container' AS source_type,
+    timestamp AS ts,
+    level,
+    message
+FROM container_logs

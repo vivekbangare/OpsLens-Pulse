@@ -4,9 +4,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
-	"time"
-
 	"opslense-pulse/shared"
+	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -185,13 +184,14 @@ func (c *ClickHouseStore) UpsertAgentMetadata(m shared.HostMetrics) error {
 
 	_, err := c.db.Exec(`
 		INSERT INTO agents
-		(tenant_id, agent_id, hostname, ip, os, version, environment, tags, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, agent_id, hostname, ip, public_ip, os, version, environment, tags, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.TenantID,
 		m.AgentID,
 		m.Hostname,
 		m.IP,
+		m.PublicIP,
 		m.OS,
 		m.Version,
 		m.Tags["env"],
@@ -507,6 +507,95 @@ func (c *ClickHouseStore) GetLogSources(
 		}
 	}
 	return sources, nil
+}
+
+func (c *ClickHouseStore) SearchLogs(
+	tenantID string,
+	req shared.LogSearchRequest,
+) ([]map[string]interface{}, error) {
+
+	fromTime, err := time.Parse(time.RFC3339, req.From)
+	if err != nil {
+		return nil, err
+	}
+
+	toTime, err := time.Parse(time.RFC3339, req.To)
+	if err != nil {
+		return nil, err
+	}
+
+	query := `
+        SELECT tenant_id, agent_id, source_name, source_type,
+               ts, level, message
+        FROM unified_logs
+        WHERE tenant_id = ?
+          AND ts BETWEEN ? AND ?
+    `
+
+	args := []interface{}{tenantID, fromTime, toTime}
+
+	if req.Level != "" {
+		query += " AND level = ?"
+		args = append(args, req.Level)
+	}
+
+	if req.Source != "" {
+		query += " AND source_type = ?"
+		args = append(args, req.Source)
+	}
+
+	if req.Query != "" {
+		query += " AND message ILIKE ?"
+		args = append(args, "%"+req.Query+"%")
+	}
+
+	query += " ORDER BY ts DESC"
+
+	if req.Limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, req.Limit, req.Offset)
+	} else {
+		query += " LIMIT 500"
+	}
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+
+	for rows.Next() {
+		var tenantID, agentID, sourceName, sourceType string
+		var ts time.Time
+		var level, message string
+
+		err := rows.Scan(
+			&tenantID,
+			&agentID,
+			&sourceName,
+			&sourceType,
+			&ts,
+			&level,
+			&message,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		results = append(results, map[string]interface{}{
+			"tenant_id":   tenantID,
+			"agent_id":    agentID,
+			"source_name": sourceName,
+			"source_type": sourceType,
+			"ts":          ts.Unix(),
+			"level":       level,
+			"message":     message,
+		})
+	}
+
+	return results, nil
 }
 
 // -------------------------------

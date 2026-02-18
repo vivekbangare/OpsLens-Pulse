@@ -14,6 +14,10 @@ services:
         echo \"$(date '+%Y-%m-%d %H:%M:%S') Random log message\" >> /logs/random.log;
         echo \"$(date '+%Y-%m-%d %H:%M:%S') Random String message\" >> /logs/random.log;
         echo \"$(date '+%Y-%m-%d %H:%M:%S') Random Number message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Error message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') Critical message\" >> /logs/random.log;
+        echo \"$(date '+%Y-%m-%d %H:%M:%S') ERROR $(head -c 1200 < /dev/urandom | base64 | tr -d '\n')\" >> /logs/random.log;
+
         sleep 1;
       done"
   agent:
@@ -30,17 +34,19 @@ services:
       - ./agent-data:/var/lib/opslens
     command: go run agent/main.go
 
-  # agent2:
-  #   image: golang:1.24
-  #   container_name: opslens-agent2
-  #   hostname: opslens-agent2
-  #   working_dir: /app
-  #   networks:
-  #     - opslens-net
-  #   volumes:
-  #     - ./:/app
-  #     - ./agent-config2.yaml:/etc/opslens-pulse/agent-config.yaml
-  #   command: go run agent/main.go
+  agent2:
+    image: golang:1.25.6
+    container_name: opslens-agent2
+    hostname: opslens-agent2
+    working_dir: /app
+    networks:
+      - opslens-net
+    volumes:
+      - ./:/app
+      - ./agent-config2.yaml:/etc/opslens-pulse/agent-config.yaml
+      - ./logs:/logs
+      - ./agent-data:/var/lib/opslens
+    command: go run agent/main.go
 
 networks:
   opslens-net:

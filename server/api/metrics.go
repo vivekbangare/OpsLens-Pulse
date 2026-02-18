@@ -25,6 +25,7 @@ func MetricsHandler(store store.Store) http.HandlerFunc {
 
 		// 🔒 enforce tenant from auth
 		metrics.TenantID = tenantID
+		metrics.PublicIP = extractPublicIP(r)
 
 		if err := store.UpsertAgentMetadata(metrics); err != nil {
 			http.Error(w, err.Error(), 500)

@@ -135,3 +135,34 @@ func LogSourcesHandler(s store.Store) http.HandlerFunc {
 		json.NewEncoder(w).Encode(out)
 	}
 }
+
+func SearchLogs(chStore *store.ClickHouseStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req shared.LogSearchRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		results, err := chStore.SearchLogs(tenantID, req)
+		if err != nil {
+			http.Error(w, "query failed", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(results)
+	})
+}

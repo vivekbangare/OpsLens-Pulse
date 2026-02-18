@@ -23,6 +23,7 @@ import (
 	"opslense-pulse/server/auth"
 	"opslense-pulse/server/config"
 	"opslense-pulse/server/db"
+	"opslense-pulse/server/handlers"
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
 	"opslense-pulse/shared"
@@ -232,6 +233,17 @@ func main() {
 		middleware.UserAuth(jwtManager, pg)(
 			middleware.RequirePermission("logs.read")(
 				api.ContainerLogsHandler(chStore),
+			),
+		),
+	)
+	logHandler := &handlers.Handler{
+		Store: chStore,
+	}
+
+	mux.Handle("/api/logs/search",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("logs.read")(
+				http.HandlerFunc(logHandler.SearchLogs),
 			),
 		),
 	)

@@ -19,6 +19,7 @@ export interface User {
   is_super_admin?: boolean
   currentTenantId?: string
   tenants?: Tenant[]
+  permissions?: string[]
 }
 
 interface AuthContextType {

@@ -4,13 +4,16 @@ import App from "./App"
 import "./styles/dashboard.css"
 import ErrorBoundary from "./components/ErrorBoundary"
 import { AuthProvider } from "./auth/AuthContext"
+import { SearchProvider } from "./context/SearchContext"
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <BrowserRouter>
     <AuthProvider>
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
+      <SearchProvider>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </SearchProvider>
     </AuthProvider>
   </BrowserRouter>
 )
