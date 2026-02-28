@@ -30,6 +30,9 @@ func LoadUserPermissions(db *sql.DB, userID string, tenantID string) (map[string
 			perms[name] = true
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	return perms, nil
 }

@@ -1,10 +1,11 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
+
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
 	"opslense-pulse/shared"
 )
 
@@ -13,25 +14,45 @@ type Handler struct {
 }
 
 func (h *Handler) SearchLogs(w http.ResponseWriter, r *http.Request) {
-	var req shared.LogSearchRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
+	reqID := middleware.GetRequestID(r.Context())
+
+	var req shared.LogSearchRequest
+	if err := utils.DecodeJSONStrict(r, &req); err != nil {
+		utils.WriteError(
+			w,
+			http.StatusBadRequest,
+			"invalid_json",
+			"invalid payload",
+			reqID,
+		)
 		return
 	}
 
 	tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 	if !ok || tenantID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		utils.WriteError(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+			"tenant missing",
+			reqID,
+		)
 		return
 	}
 
-	logs, err := h.Store.SearchLogs(tenantID, req)
+	logs, err := h.Store.SearchLogs(r.Context(), tenantID, req)
 	if err != nil {
-		http.Error(w, "query failed", http.StatusInternalServerError)
+		utils.WriteError(
+			w,
+			http.StatusInternalServerError,
+			"internal_error",
+			"query failed",
+			reqID,
+		)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(logs)
+	utils.WriteJSON(w, http.StatusOK, logs)
 }

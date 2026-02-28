@@ -3,28 +3,26 @@ package collector
 import (
 	"context"
 	"encoding/json"
-	"log"
-	"opslense-pulse/agent/containers"
-	"opslense-pulse/agent/retry"
-	"opslense-pulse/agent/sender"
-	"opslense-pulse/shared"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/limiter"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/shared"
 )
 
 var (
-	containerLastLine     = make(map[string]int)
-	containerLastLineFile = filepath.Join(BaseDir, "container_last_line.json")
+	containerLastTime     = make(map[string]int64)
+	containerLastLineFile = filepath.Join(StateDir, "container_last_time.json")
 	containerLastLineLock = &sync.Mutex{}
-
-	logsDirty      = false
-	logsFlushEvery = 30 * time.Second
+	logsDirty             = false
+	logsFlushEvery        = 30 * time.Second
 )
 
-// loadLastLines loads last read positions
 func loadLastLines() {
 	data, err := os.ReadFile(containerLastLineFile)
 	if err != nil {
@@ -32,10 +30,9 @@ func loadLastLines() {
 	}
 	containerLastLineLock.Lock()
 	defer containerLastLineLock.Unlock()
-	_ = json.Unmarshal(data, &containerLastLine)
+	_ = json.Unmarshal(data, &containerLastTime)
 }
 
-// saveLastLines persists positions (only if dirty)
 func saveLastLines() {
 	containerLastLineLock.Lock()
 	defer containerLastLineLock.Unlock()
@@ -44,28 +41,26 @@ func saveLastLines() {
 		return
 	}
 
-	data, err := json.Marshal(containerLastLine)
+	data, err := json.Marshal(containerLastTime)
 	if err != nil {
-		log.Println("Error marshaling container log cursor:", err)
+		shared.Error("container log cursor marshal failed", "error", err.Error())
 		return
 	}
 
 	tmp := containerLastLineFile + ".tmp"
-
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		log.Println("Error writing temp container log cursor:", err)
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		shared.Error("container log cursor temp write failed", "error", err.Error())
 		return
 	}
 
 	if err := os.Rename(tmp, containerLastLineFile); err != nil {
-		log.Println("Error renaming container log cursor:", err)
+		shared.Error("container log cursor rename failed", "error", err.Error())
 		return
 	}
 
 	logsDirty = false
 }
 
-// periodicLogsFlush background flusher
 func periodicLogsFlush(ctx context.Context) {
 	ticker := time.NewTicker(logsFlushEvery)
 	defer ticker.Stop()
@@ -81,12 +76,15 @@ func periodicLogsFlush(ctx context.Context) {
 	}
 }
 
-// StartContainerLogsCollector collects logs from Docker containers
 func StartContainerLogsCollector(
 	ctx context.Context,
-	agentID, hostname, serverURL, apiKey string,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
 	intervalSeconds int,
 ) {
+
+	shared.Info("container logs collector started")
+
 	loadLastLines()
 	go periodicLogsFlush(ctx)
 
@@ -95,33 +93,30 @@ func StartContainerLogsCollector(
 
 	for {
 		select {
+
 		case <-ctx.Done():
-			log.Println("📦 Container logs collector stopped")
 			saveLastLines()
+			shared.Info("container logs collector stopped")
 			return
 
 		case <-ticker.C:
-			list, err := containers.ListRunning()
+
+			list, err := containers.ListRunning(ctx)
 			if err != nil {
-				log.Println("Error listing containers:", err)
+				shared.Error("list containers failed", "error", err.Error())
 				continue
 			}
 
 			for _, c := range list {
-				lines, err := containers.GetContainerLogs(c.ID, 100)
+
+				containerLastLineLock.Lock()
+				last := containerLastTime[c.ID]
+				containerLastLineLock.Unlock()
+
+				lines, err := containers.GetContainerLogsSince(ctx, c.ID, last)
 				if err != nil || len(lines) == 0 {
 					continue
 				}
-
-				containerLastLineLock.Lock()
-				last := containerLastLine[c.ID]
-				containerLastLineLock.Unlock()
-
-				if last >= len(lines) {
-					continue
-				}
-
-				newLines := lines[last:]
 
 				name := ""
 				if len(c.Names) > 0 {
@@ -129,7 +124,15 @@ func StartContainerLogsCollector(
 				}
 
 				var entries []shared.ContainerLog
-				for _, line := range newLines {
+
+				for _, line := range lines {
+
+					if !limiter.Allow() {
+						continue
+					}
+
+					level := ExtractLevel(line)
+
 					entries = append(entries, shared.ContainerLog{
 						AgentID:       agentID,
 						Hostname:      hostname,
@@ -137,7 +140,7 @@ func StartContainerLogsCollector(
 						ContainerName: name,
 						Timestamp:     time.Now().Unix(),
 						Message:       line,
-						Level:         "info",
+						Level:         level,
 					})
 				}
 
@@ -151,15 +154,15 @@ func StartContainerLogsCollector(
 					Logs:     entries,
 				}
 
-				if err := retry.Do(3, 2*time.Second, func() error {
-					return sender.SendContainerLogs(serverURL, apiKey, batch)
-				}); err != nil {
-					log.Println("Container logs send failed:", err)
+				// ✅ Enqueue instead of direct send
+				if err := logsQueue.Enqueue(batch); err != nil {
+					shared.Error("enqueue container logs failed", "error", err.Error())
 					continue
 				}
 
+				// Update cursor only after successful enqueue
 				containerLastLineLock.Lock()
-				containerLastLine[c.ID] = len(lines)
+				containerLastTime[c.ID] = time.Now().Unix()
 				logsDirty = true
 				containerLastLineLock.Unlock()
 			}

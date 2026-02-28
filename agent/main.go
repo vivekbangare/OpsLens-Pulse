@@ -3,258 +3,220 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
-	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"syscall"
+	"time"
+
 	"opslense-pulse/agent/collector"
 	"opslense-pulse/agent/config"
 	"opslense-pulse/agent/containers"
 	"opslense-pulse/agent/heartbeat"
 	"opslense-pulse/agent/identity"
 	"opslense-pulse/agent/metrics"
+	"opslense-pulse/agent/queue"
 	"opslense-pulse/agent/retry"
+	"opslense-pulse/agent/safe"
 	"opslense-pulse/agent/sender"
 	"opslense-pulse/shared"
-	"os"
-	"os/signal"
-	"runtime"
-	"syscall"
-	"time"
 )
 
 const AgentVersion = "1.0.0"
 
-func printHelp() {
-	fmt.Print(`
-OpsLens-Pulse Agent
-
-Usage:
-  opslens-pulse-agent [options]
-
-Options:
-  --config <path>     Path to YAML config file
-  --version           Show version
-  --help              Show help
-
-Defaults:
-  Linux:   /etc/opslens-pulse/agent-config.yaml
-  Windows: C:\ProgramData\OpsLens-Pulse\agent-config.yaml
-
-Env:
-  OPS_AGENT_CONFIG
-`)
-}
-
-func getLocalIP() string {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return ""
-	}
-
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
-				continue
-			}
-			return ip.String()
-		}
-	}
-	return ""
-}
-
-func defaultLogSources() []config.LogSource {
-	if runtime.GOOS == "windows" {
-		return []config.LogSource{
-			{
-				Name: "agent-self",
-				Type: "file",
-				Path: `C:\ProgramData\OpsLens-Pulse\agent.log`,
-			},
-		}
-	}
-
-	return []config.LogSource{
-		{
-			Name: "agent-self",
-			Type: "file",
-			Path: "/var/log/opslens-pulse/agent.log",
-		},
-		{
-			Name: "system-syslog",
-			Type: "file",
-			Path: "/var/log/syslog",
-		},
-	}
-}
-
 func main() {
-	shared.InitLogger("agent")
-	log.Println("🚀 OpsLens-Pulse Agent starting...")
 
-	// Parse flags
+	shared.InitLogger("agent")
+	shared.Info("🚀 OpsLens-Pulse Agent starting...")
+
+	// -------------------------
+	// Config
+	// -------------------------
+
 	var configPath string
 	flag.StringVar(&configPath, "config", "", "Config path")
-	showHelp := flag.Bool("help", false, "Help")
-	showVersion := flag.Bool("version", false, "Version")
 	flag.Parse()
 
-	if *showHelp {
-		printHelp()
-		return
-	}
-	if *showVersion {
-		fmt.Println(AgentVersion)
-		return
-	}
-
-	// Load config
 	cfg, path, created, err := config.LoadOrCreateConfig(configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if created {
-		log.Printf("📄 Agent config created at: %s\n", path)
-	} else {
-		log.Printf("📄 Agent config loaded from: %s\n", path)
+		log.Printf("📄 Config created at: %s\n", path)
 	}
 
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
 
-	// Agent ID
+	// -------------------------
+	// TLS HTTP Client
+	// -------------------------
+
+	sender.InitHTTPClient(cfg.Server.InsecureSkipVerify)
+	sender.SetAgentVersion(AgentVersion)
+	// -------------------------
+	// Identity
+	// -------------------------
+
 	agentID, err := identity.LoadOrCreateAgentID()
 	if err != nil {
-		log.Fatal("Failed to load/create agent ID:", err)
+		log.Fatal(err)
 	}
-	log.Printf("🆔 Agent ID: %s\n", agentID)
 
 	hostname, _ := os.Hostname()
 	serverURL := cfg.Server.URL
 	apiKey := cfg.Server.APIKey
 
 	if serverURL == "" || apiKey == "" {
-		log.Fatal("🌐 server.url and 🔐 server.api_key must be set in agent config")
+		log.Fatal("server.url and server.api_key must be set")
 	}
 
-	logSources := cfg.Agent.Logs
-	if len(logSources) == 0 {
-		log.Println("⚠️ No log sources configured, using defaults")
-		logSources = defaultLogSources()
-	}
+	// -------------------------
+	// Context + Shutdown
+	// -------------------------
 
-	logInterval := cfg.Agent.LogCollectionIntervalSeconds
-	if logInterval <= 0 {
-		logInterval = 10
-	}
-
-	// Context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Capture termination signals
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start host log collector
-	for _, src := range logSources {
-		go collector.StartLogSource(
-			ctx,
-			agentID,
-			hostname,
-			src,
-			serverURL,
-			apiKey,
-			cfg.Agent.LogCollectionIntervalSeconds,
-		)
+	// -------------------------
+	// Queues
+	// -------------------------
+
+	metricsQueue := queue.New(filepath.Join(collector.QueueDir, "metrics.queue"))
+	logsQueue := queue.New(filepath.Join(collector.QueueDir, "logs.queue"))
+
+	safe.Go("metrics-sender", func() {
+		queue.StartMetricsSender(ctx, metricsQueue, serverURL, apiKey)
+	})
+
+	safe.Go("logs-sender", func() {
+		queue.StartLogsSender(ctx, logsQueue, serverURL, apiKey)
+	})
+	// -------------------------
+	// Log Sources (file / dir )
+	// -------------------------
+
+	for _, src := range cfg.Agent.Logs {
+		srcCopy := src
+		safe.Go("log-source-"+srcCopy.Name, func() {
+			collector.StartLogSource(
+				ctx,
+				agentID,
+				hostname,
+				srcCopy,
+				logsQueue,
+			)
+		})
 	}
 
-	// Docker detection
-	dockerAvailable := false
-	if _, err := containers.ListRunning(); err == nil {
-		dockerAvailable = true
+	// -------------------------
+	// Docker collectors
+	// -------------------------
+
+	if _, err := containers.ListRunning(ctx); err == nil {
+		safe.Go("container-metrics", func() {
+			collector.StartContainerMetricsCollector(
+				ctx,
+				agentID,
+				hostname,
+				serverURL,
+				apiKey,
+				10,
+			)
+		})
+
+		safe.Go("container-logs", func() {
+			collector.StartContainerLogsCollector(
+				ctx,
+				agentID,
+				hostname,
+				logsQueue,
+				10,
+			)
+		})
 	}
 
-	if dockerAvailable {
-		log.Println("🐳 Docker detected: starting container collectors...")
+	// -------------------------
+	// Main Metrics Loop
+	// -------------------------
 
-		go collector.StartContainerMetricsCollector(ctx, agentID, hostname, serverURL, apiKey, 10)
-		go collector.StartContainerLogsCollector(ctx, agentID, hostname, serverURL, apiKey, 10)
-		defer containers.Shutdown()
-	}
-
-	// Main metrics + heartbeat loop
 	ticker := time.NewTicker(time.Duration(cfg.Agent.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
+
 		case <-ctx.Done():
-			log.Println("Agent shutting down gracefully...")
-			// Close Docker client if initialized
+			shared.Info("🛑 Agent shutting down...")
 			containers.Shutdown()
 			return
+
 		case <-sig:
 			cancel()
-		case <-ticker.C:
-			start := time.Now()
 
-			// Collect host metrics
-			memTotal, memUsed := metrics.Memory()
-			diskTotal, diskUsed := metrics.DiskUsage()
+		case <-ticker.C:
+			disks := metrics.DiskUsageAll()
 			osName, uptime := metrics.HostInfo()
+			health := metrics.GetAgentHealth()
+			cpu := metrics.CPUPercent()
+			cpuAnomaly := metrics.DetectCPUAnomaly(cpu)
+			memTotal, memUsed := metrics.Memory()
+			memAnomaly := metrics.DetectMemoryAnomaly(memUsed, memTotal)
+			netRates := metrics.NetworkRates()
+
+			var network []shared.NetworkInterface
+			for _, n := range netRates {
+				network = append(network, shared.NetworkInterface{
+					Name:   n.Name,
+					InBps:  float32(n.RecvPerSec),
+					OutBps: float32(n.SentPerSec),
+				})
+			}
 
 			m := shared.HostMetrics{
-				AgentID:     agentID,
-				Hostname:    hostname,
-				OS:          osName,
-				Version:     AgentVersion,
-				Timestamp:   time.Now().Unix(),
-				Cores:       runtime.NumCPU(),
+				AgentID:    agentID,
+				Hostname:   hostname,
+				OS:         osName,
+				Version:    AgentVersion,
+				Timestamp:  time.Now().Unix(),
+				Cores:      runtime.NumCPU(),
+				CPUPercent: float32(cpu),
+
+				CPUCritical: cpuAnomaly.Critical,
+				CPUSpike:    cpuAnomaly.Spike,
 				MemTotalMB:  float32(memTotal),
 				MemUsedMB:   float32(memUsed),
-				DiskTotalMB: float32(diskTotal),
-				DiskUsedMB:  float32(diskUsed),
+				MemCritical: memAnomaly.Critical,
+				MemPressure: memAnomaly.Pressure,
+				Disks:       disks,
 				UptimeSec:   uptime,
-				CPUPercent:  float32(metrics.CPUPercent()),
 				Tags:        cfg.Tags,
-				IP:          getLocalIP(),
+				Network:     network,
+				Agent: shared.AgentHealth{
+					CPUPercent:      health.CPUPercent,
+					MemoryMB:        health.MemoryMB,
+					Goroutines:      health.Goroutines,
+					UptimeSec:       health.UptimeSec,
+					MetricsFailures: health.MetricsFailures,
+					LogFailures:     health.LogFailures,
+				},
 			}
 
-			// Send host metrics with retry
-			if err := retry.Do(3, 2*time.Second, func() error {
-				return sender.Send(serverURL, apiKey, m)
-			}); err != nil {
-				log.Println("Metrics send failed:", err)
+			// Enqueue metrics
+			if err := metricsQueue.Enqueue(m); err != nil {
+				shared.Error("metrics queue error", "error", err.Error())
 			}
 
-			// Send heartbeat with retry
-			if err := retry.Do(3, 2*time.Second, func() error {
+			// Heartbeat (direct)
+			_ = retry.Do(3, 2*time.Second, func() error {
 				return heartbeat.Send(serverURL, apiKey, agentID, hostname)
-			}); err != nil {
-				log.Println("Heartbeat send failed:", err)
-			}
-
-			// Correct sleep to avoid drift
-			elapsed := time.Since(start)
-			sleep := time.Duration(cfg.Agent.IntervalSeconds)*time.Second - elapsed
-			if sleep > 0 {
-				time.Sleep(sleep)
-			}
+			})
 		}
 	}
 }

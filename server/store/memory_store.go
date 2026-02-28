@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"opslense-pulse/shared"
 	"sync"
 	"time"
@@ -33,7 +34,7 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-func (m *MemoryStore) SaveContainerMetrics(metrics shared.ContainerMetrics) error {
+func (m *MemoryStore) SaveContainerMetrics(ctx context.Context, metrics shared.ContainerMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -48,7 +49,7 @@ func (m *MemoryStore) SaveContainerMetrics(metrics shared.ContainerMetrics) erro
 	return nil
 }
 
-func (m *MemoryStore) InsertContainerLogs(batch shared.ContainerLogBatch) error {
+func (m *MemoryStore) InsertContainerLogs(ctx context.Context, batch shared.ContainerLogBatch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -73,7 +74,7 @@ func (m *MemoryStore) InsertContainerLogs(batch shared.ContainerLogBatch) error 
 // -------------------------------
 // SaveMetrics: store host metrics
 // -------------------------------
-func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
+func (m *MemoryStore) SaveMetrics(ctx context.Context, metrics shared.HostMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -96,7 +97,7 @@ func (m *MemoryStore) SaveMetrics(metrics shared.HostMetrics) error {
 // -------------------------------
 // Logs
 // -------------------------------
-func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
+func (m *MemoryStore) InsertLogs(ctx context.Context, batch shared.LogBatch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -128,12 +129,14 @@ func (m *MemoryStore) InsertLogs(batch shared.LogBatch) error {
 // Fetch logs
 // -------------------------------
 func (m *MemoryStore) GetLogs(
+	ctx context.Context,
 	TenantID string,
 	hostname string,
 	agentID string,
 	from, to time.Time,
 	level string,
 	source string,
+	source_type string,
 	limit int,
 ) ([]shared.LogEntry, error) {
 
@@ -182,7 +185,7 @@ func (m *MemoryStore) GetLogs(
 	return out, nil
 }
 
-func (m *MemoryStore) GetLogSources(TenantID, agentID string) ([]string, error) {
+func (m *MemoryStore) GetLogSources(ctx context.Context, TenantID, agentID string) ([]string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -223,7 +226,7 @@ func (m *MemoryStore) InsertAPIKey(k shared.APIKey) error {
 }
 
 func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, string, error) {
-	hash := hashAPIKey(rawKey)
+	hash := HashAPIKey(rawKey)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	k, ok := m.apiKeys[hash]
@@ -233,7 +236,7 @@ func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, string, error) {
 	return true, k.TenantID, nil
 }
 
-func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
+func (m *MemoryStore) UpsertAgentHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -246,7 +249,7 @@ func (m *MemoryStore) UpsertAgentHeartbeat(hb shared.Heartbeat) error {
 	return nil
 }
 
-func (m *MemoryStore) ListAgents(TenantID string) ([]shared.AgentInfo, error) {
+func (m *MemoryStore) ListAgents(ctx context.Context, TenantID string) ([]shared.AgentInfo, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -263,7 +266,7 @@ func (m *MemoryStore) ListAgents(TenantID string) ([]shared.AgentInfo, error) {
 	return agents, nil
 }
 
-func (m *MemoryStore) GetLatestHostMetrics(TenantID string) (map[string]shared.HostMetrics, error) {
+func (m *MemoryStore) GetLatestHostMetrics(ctx context.Context, TenantID string) (map[string]shared.HostMetrics, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -272,7 +275,7 @@ func (m *MemoryStore) GetLatestHostMetrics(TenantID string) (map[string]shared.H
 	return map[string]shared.HostMetrics{}, nil
 }
 
-func (m *MemoryStore) UpsertAgentMetadata(hm shared.HostMetrics) error {
+func (m *MemoryStore) UpsertAgentMetadata(ctx context.Context, hm shared.HostMetrics) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -293,6 +296,23 @@ func (m *MemoryStore) UpsertAgentMetadata(hm shared.HostMetrics) error {
 	}
 
 	return nil
+}
+
+func (m *MemoryStore) GetLogsTimeline(
+	ctx context.Context,
+	tenantID string,
+	agentID string,
+	sourceType string,
+	from, to time.Time,
+) (TimelineResult, error) {
+
+	// Memory store does not persist timeline aggregation.
+	// Return empty result safely.
+
+	return TimelineResult{
+		Points:  []TimelinePoint{},
+		Anomaly: false,
+	}, nil
 }
 
 var _ Store = (*MemoryStore)(nil)

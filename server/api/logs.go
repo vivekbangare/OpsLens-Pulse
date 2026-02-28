@@ -2,53 +2,57 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
-	"opslense-pulse/server/middleware"
-	"opslense-pulse/server/store"
-	"opslense-pulse/shared"
 	"strconv"
 	"time"
+
+	"go.uber.org/zap"
+
+	"opslense-pulse/server/logger"
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
+	"opslense-pulse/shared"
 )
 
 /*
 POST /api/logs
-Agent → Server (INSERT)
 */
 func LogsHandler(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
 			return
 		}
 
 		var batch shared.LogBatch
-		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+		if err := utils.DecodeJSONStrict(r, &batch); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_json", err.Error(), reqID)
 			return
 		}
+
+		if err := validation.ValidateLogBatch(&batch); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "validation_error", err.Error(), reqID)
+			return
+		}
+
 		batch.TenantID = tenantID
-		log.Printf(
-			"📥 Inserting logs: tenant=%s agent=%s host=%s count=%d",
-			batch.TenantID,
-			batch.AgentID,
-			batch.Hostname,
-			len(batch.Logs),
+
+		log := middleware.GetLogger(r.Context())
+		log.Info("inserting logs",
+			zap.String("tenant_id", batch.TenantID),
+			zap.String("agent_id", batch.AgentID),
+			zap.String("hostname", batch.Hostname),
+			zap.Int("count", len(batch.Logs)),
 		)
 
-		if batch.AgentID == "" {
-			http.Error(w, "missing agent_id", http.StatusBadRequest)
-			return
-		}
-		if batch.Hostname == "" {
-			http.Error(w, "missing hostname", http.StatusBadRequest)
-			return
-		}
-
-		if err := store.InsertLogs(batch); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if err := store.InsertLogs(r.Context(), batch); err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
 			return
 		}
 
@@ -58,24 +62,24 @@ func LogsHandler(store store.Store) http.HandlerFunc {
 
 /*
 GET /api/logs/fetch
-UI → Server (QUERY)
 */
 func FetchLogsHandler(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		// ✅ Query params
-		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		reqID := middleware.GetRequestID(r.Context())
 
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
 			return
 		}
+
 		agentID := r.URL.Query().Get("agent_id")
 		hostname := r.URL.Query().Get("hostname")
 		level := r.URL.Query().Get("level")
 		source := r.URL.Query().Get("source")
+		sourceType := r.URL.Query().Get("source_type")
 
-		// Time range
 		var start, end time.Time
 
 		if v := r.URL.Query().Get("start"); v != "" {
@@ -98,6 +102,7 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 		}
 
 		logs, err := s.GetLogs(
+			r.Context(),
 			tenantID,
 			hostname,
 			agentID,
@@ -105,10 +110,11 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 			end,
 			level,
 			source,
+			sourceType,
 			limit,
 		)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
 			return
 		}
 
@@ -119,50 +125,108 @@ func FetchLogsHandler(s store.Store) http.HandlerFunc {
 
 func LogSourcesHandler(s store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		agentID := r.URL.Query().Get("agent_id")
+
+		reqID := middleware.GetRequestID(r.Context())
+
 		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
-
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
 			return
 		}
 
-		out, err := s.GetLogSources(tenantID, agentID)
+		agentID := r.URL.Query().Get("agent_id")
+
+		out, err := s.GetLogSources(r.Context(), tenantID, agentID)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
 			return
 		}
-		json.NewEncoder(w).Encode(out)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
 	}
 }
 
 func SearchLogs(chStore *store.ClickHouseStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
+		reqID := middleware.GetRequestID(r.Context())
+
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			utils.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", reqID)
 			return
 		}
 
 		var req shared.LogSearchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		if err := utils.DecodeJSONStrict(r, &req); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_json", err.Error(), reqID)
 			return
 		}
 
 		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
 			return
 		}
 
-		results, err := chStore.SearchLogs(tenantID, req)
+		results, err := chStore.SearchLogs(r.Context(), tenantID, req)
 		if err != nil {
-			http.Error(w, "query failed", http.StatusInternalServerError)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "query failed", reqID)
 			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(results)
+		_ = json.NewEncoder(w).Encode(results)
 	})
+}
+
+func LogsTimelineHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		fromStr := r.URL.Query().Get("from")
+		toStr := r.URL.Query().Get("to")
+		agentID := r.URL.Query().Get("agent_id")
+		sourceType := r.URL.Query().Get("source_type")
+
+		from, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid from timestamp", reqID)
+			return
+		}
+
+		to, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid to timestamp", reqID)
+			return
+		}
+
+		result, err := s.GetLogsTimeline(
+			r.Context(),
+			tenantID,
+			agentID,
+			sourceType,
+			from,
+			to,
+		)
+
+		if err != nil {
+			logger.Log.Error("timeline query failed",
+				zap.String("tenant_id", tenantID),
+				zap.Error(err),
+			)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	}
 }

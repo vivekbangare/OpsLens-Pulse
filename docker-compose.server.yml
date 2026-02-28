@@ -1,5 +1,4 @@
 services:
-
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     container_name: opslens-clickhouse
@@ -10,9 +9,8 @@ services:
       - "9000:9000"
     environment:
       - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_PASSWORD=ch_password
       - CLICKHOUSE_DB=opslens
-      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse-db/init:/docker-entrypoint-initdb.d
@@ -26,12 +24,10 @@ services:
       timeout: 3s
       retries: 10
 
-
   postgres:
     image: postgres:16
     container_name: opslens-postgres
-    restart: always
-    networks:               
+    networks:
       - opslens-net
     environment:
       POSTGRES_USER: opslens
@@ -48,41 +44,31 @@ services:
       timeout: 5s
       retries: 5
 
-
   server:
-    image: golang:1.25.6
+    image: golang:1.25.6-alpine
     container_name: opslens-server
     working_dir: /app
-    networks:
-      - opslens-net
+    volumes:
+      - .:/app
+      - ./server-config.yaml:/etc/opslens-pulse/server-config.yaml
+    command: sh -c "go run ./server"
     ports:
       - "9898:9898"
-    volumes:
-      - ./:/app
-      - ./server-config.yaml:/etc/opslens-pulse/server-config.yaml
-    command: go run server/main.go
+    networks:
+      - opslens-net
     environment:
-      - CLICKHOUSE_HOST=clickhouse
-      - CLICKHOUSE_PORT=9000
-      - CLICKHOUSE_USER=default
-      - CLICKHOUSE_PASSWORD=
-      - CLICKHOUSE_DATABASE=opslens
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_USER=opslens           
-      - POSTGRES_PASSWORD=opslens_password
-      - POSTGRES_DB=opslens
       - JWT_SECRET=supersecret
+      - POSTGRES_PASSWORD=opslens_password
+      - CLICKHOUSE_PASSWORD=ch_password
     depends_on:
       clickhouse:
         condition: service_healthy
       postgres:
         condition: service_healthy
 
-
 networks:
   opslens-net:
-    external: true
+    driver: bridge
 
 volumes:
   clickhouse-data:

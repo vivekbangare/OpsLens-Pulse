@@ -1,0 +1,1121 @@
+.cardPanel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-soft);
+}
+
+.statCard {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  min-width: 180px;
+}
+
+.statLabel {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.statValue {
+  font-size: 28px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.grid {
+  display: flex;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.healthBadge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.healthBadge.healthy {
+  background: rgba(34,197,94,0.15);
+  color: var(--success);
+}
+
+.healthBadge.warning {
+  background: rgba(245,158,11,0.15);
+  color: var(--warning);
+}
+
+.healthBadge.critical {
+  background: rgba(239,68,68,0.15);
+  color: var(--danger);
+}
+
+.healthBadge.unknown {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+}
+
+/* ========================= */
+/* AGENT HEALTH TOOLTIP */
+/* ========================= */
+
+.healthWrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.healthTooltip {
+  position: absolute;
+  bottom: 120%;     /* show above badge */
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 160px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  box-shadow: var(--shadow-soft);
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.15s ease;
+  z-index: 9999;
+}
+
+.healthWrapper:hover .healthTooltip {
+  opacity: 1;
+}
+
+.tooltipTitle {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.tooltipRow {
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+}
+
+.tooltipReason {
+  margin-top: 6px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.tableWrap {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  overflow: visible;
+  box-shadow: var(--shadow-soft);
+}
+
+.hostTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 10px;
+}
+
+.hostTable thead th {
+  text-align: left;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.hostRow {
+  background: var(--bg-card);
+  box-shadow: var(--shadow-soft);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.hostRow:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-medium);
+}
+
+.hostRow td {
+  padding: 18px 16px;
+}
+
+.hostCell .hostName {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.hostCell .hostSub {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.detailHeader {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.backBtn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  cursor: pointer;
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+  margin-bottom: 30px;
+}
+
+.metricCard {
+  background: var(--bg-card);
+  padding: 20px;
+  border-radius: 14px;
+  box-shadow: var(--shadow-soft);
+}
+
+.metricTitle {
+  font-size: 13px;
+  opacity: 0.6;
+}
+
+.metricValue {
+  font-size: 20px;
+  font-weight: 600;
+  margin-top: 6px;
+}
+
+.cardSection {
+  background: var(--bg-card);
+  padding: 20px;
+  border-radius: 14px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-soft);
+}
+
+.tagWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  background: var(--bg-secondary);
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.logFilters {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.logContainer {
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.logRow {
+  margin-bottom: 4px;
+}
+
+.containerRow {
+  margin-bottom: 6px;
+}
+
+.muted {
+  opacity: 0.6;
+}
+
+/* ============================= */
+/* Hosts Controls */
+/* ============================= */
+
+.hostsControls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.searchBox {
+  flex: 1;
+  min-width: 260px;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #0f172a;
+  color: white;
+  font-size: 14px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.input::placeholder {
+  color: rgba(255,255,255,0.4);
+}
+
+.input:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.2);
+}
+
+.statusFilters {
+  display: flex;
+  gap: 10px;
+}
+
+.filterBtn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: #1e293b;
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #cbd5e1;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.filterBtn:hover {
+  background: #334155;
+}
+
+.activeFilter {
+  background: #2563eb;
+  color: white;
+  border-color: #2563eb;
+}
+
+/* ============================= */
+/* Host Count Badge */
+/* ============================= */
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.hostCountBadge {
+  background: #1e293b;
+  color: #cbd5e1;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ============================= */
+/* Compact Logs Toolbar */
+/* ============================= */
+
+.logsToolbarCompact {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.toolbarLeft {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toolbarRight {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Compact dropdown */
+.selectCompact {
+  background: #0f172a;
+  color: white;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  min-width: auto;
+  width: auto;
+  outline: none;
+}
+
+.selectCompact:focus {
+  border-color: #3b82f6;
+}
+
+/* Compact search */
+.searchCompact {
+  background: #0f172a;
+  color: white;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  min-width: 200px;
+  outline: none;
+}
+
+.searchCompact:focus {
+  border-color: #3b82f6;
+}
+
+/* Live button */
+.liveBtn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #cbd5e1;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.liveBtn:hover {
+  border-color: #3b82f6;
+  color: white;
+}
+
+/* ============================= */
+/* Compact Time Range Picker */
+/* ============================= */
+
+.timeRangeCompact {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* Dark input */
+.dateInputCompact {
+  background: #0f172a !important;
+  color: white !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  border-radius: 8px !important;
+  padding: 6px 10px !important;
+  font-size: 13px !important;
+  width: 150px;
+  outline: none;
+}
+
+.dateInputCompact:focus {
+  border-color: #3b82f6 !important;
+}
+
+/* Apply button */
+.applyBtnCompact {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.2);
+  color: #cbd5e1;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.applyBtnCompact:hover {
+  border-color: #3b82f6;
+  color: white;
+}
+
+
+
+/* Fix calendar overlay above charts */
+.darkDatePicker {
+  z-index: 9999 !important;
+}
+
+.react-datepicker-popper {
+  z-index: 9999 !important;
+}
+
+/* ============================= */
+/* Dark React Datepicker - FULL FIX */
+/* ============================= */
+
+.darkCalendar {
+  background-color: #0f172a !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  color: white !important;
+}
+
+.darkCalendar .react-datepicker__header {
+  background-color: #1e293b !important;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.darkCalendar .react-datepicker__current-month,
+.darkCalendar .react-datepicker-time__header,
+.darkCalendar .react-datepicker-year-header {
+  color: white !important;
+}
+
+.darkCalendar .react-datepicker__day-name {
+  color: #94a3b8 !important;
+}
+
+.darkCalendar .react-datepicker__day {
+  color: white !important;
+}
+
+.darkCalendar .react-datepicker__day--outside-month {
+  color: #475569 !important;
+}
+
+.darkCalendar .react-datepicker__day--selected,
+.darkCalendar .react-datepicker__day--keyboard-selected {
+  background-color: #3b82f6 !important;
+  color: white !important;
+}
+
+.darkCalendar .react-datepicker__day:hover {
+  background-color: #334155 !important;
+}
+
+.darkCalendar .react-datepicker__time-container {
+  background-color: #0f172a !important;
+  border-left: 1px solid rgba(255,255,255,0.08);
+}
+
+.darkCalendar .react-datepicker__time-list-item {
+  color: white !important;
+}
+
+.darkCalendar .react-datepicker__time-list-item:hover {
+  background-color: #334155 !important;
+}
+
+.darkCalendar .react-datepicker__time-list-item--selected {
+  background-color: #3b82f6 !important;
+  color: white !important;
+}
+
+.dateWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.calendarIcon {
+  position: absolute;
+  left: 8px;
+  font-size: 13px;
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.dateInputCompact {
+  padding-left: 26px !important;
+}
+
+.detailsHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.subText {
+  font-size: 13px;
+  opacity: 0.6;
+}
+
+.metricsGridCompact {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.metricCompact {
+  background: #111827;
+  padding: 14px;
+  border-radius: 10px;
+}
+
+.metricLabel {
+  font-size: 12px;
+  opacity: 0.6;
+  margin-bottom: 4px;
+}
+
+.metricValue {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.compactCard {
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.tagChip {
+  background: #1e293b;
+  padding: 4px 10px;
+  border-radius: 999px;
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+.logsHeaderRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.logsFiltersCompact {
+  display: flex;
+  gap: 8px;
+}
+
+.logsCompact {
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.logLineCompact {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.topbar {
+  height: 60px;
+  padding: 0 24px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.topIcon {
+  position: relative;
+  cursor: pointer;
+  color: #94a3b8;
+  transition: 0.2s ease;
+}
+
+.topIcon:hover {
+  color: white;
+}
+
+.notification .badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  background: #ef4444;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.theme {
+  color: #facc15; /* yellow moon */
+}
+
+.userSection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  position: relative;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-weight: 600;
+}
+
+.dropdown {
+  position: absolute;
+  right: 0;
+  top: 45px;
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 8px 0;
+  width: 160px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+}
+
+.dropdown div {
+  padding: 10px 16px;
+  font-size: 14px;
+  color: #e2e8f0;
+}
+
+.dropdown div:hover {
+  background: #334155;
+}
+
+.dropdown .danger {
+  color: #f87171;
+}
+
+html {
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.theme {
+  color: #facc15;
+  cursor: pointer;
+}
+
+.globalSearch {
+  position: relative;
+  width: 300px;
+}
+
+.globalSearch input {
+  width: 100%;
+  padding: 8px 12px 8px 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+
+.searchIcon {
+  position: absolute;
+  left: 8px;
+  top: 9px;
+  opacity: 0.6;
+}
+
+.searchDropdown {
+  position: absolute;
+  top: 42px;
+  width: 100%;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 999;
+}
+
+.searchGroupTitle {
+  font-size: 11px;
+  padding: 8px 12px;
+  opacity: 0.6;
+  text-transform: uppercase;
+}
+
+.searchItem {
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.searchItem:hover {
+  background: var(--hover-bg);
+}
+
+.noResults {
+  padding: 12px;
+  opacity: 0.6;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--card-bg);
+}
+
+.topbarLeft {
+  flex: 1;
+  max-width: 420px;
+}
+
+.topbarRight {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.topIcon {
+  cursor: pointer;
+  position: relative;
+  opacity: 0.8;
+}
+
+.topIcon:hover {
+  opacity: 1;
+}
+
+.badge {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  background: #ef4444;
+  color: white;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.theme {
+  color: #facc15;
+}
+
+.userSection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  position: relative;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  background: #3b82f6;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.dropdown {
+  position: absolute;
+  right: 0;
+  top: 40px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 0;
+  width: 160px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+  z-index: 999;
+}
+
+.dropdown div {
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.dropdown div:hover {
+  background: var(--hover-bg);
+}
+
+.dropdown .danger {
+  color: #ef4444;
+}
+
+.highlight {
+  background: #facc15;
+  color: black;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.searchItem.active {
+  background: var(--hover-bg);
+}
+
+.subText {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.statusDots {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  opacity: 0.9;
+}
+
+/* Host Health Colors */
+.dot.healthy {
+  background: #22c55e;
+}
+
+.dot.warning {
+  background: #f59e0b;
+}
+
+.dot.critical {
+  background: #ef4444;
+}
+
+.dot.unknown {
+  background: #6b7280;
+}
+
+/* Agent */
+.dot.offline {
+  background: #ef4444;
+}
+
+/* Host Cell */
+.hostCell {
+  display: flex;
+  flex-direction: column;
+}
+
+.hostname {
+  font-weight: 600;
+}
+
+.internalIp {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.cloudBadge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.06);
+}
+
+.timeCell {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.statusDualWrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agentDotWrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.dot.good {
+  background: #22c55e;
+}
+
+.dot.bad {
+  background: #ef4444;
+}
+
+.cloudBadge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: rgba(255,255,255,0.05);
+}
+
+.statusDualWrapper {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dotWrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.dot:hover {
+  transform: scale(1.15);
+}
+
+/* Dot Colors */
+.dot.good {
+  background: #22c55e;
+}
+
+.dot.bad {
+  background: #ef4444;
+}
+
+.dot.warning {
+  background: #f59e0b;
+}
+
+/* Tooltip */
+.dotTooltip {
+  position: absolute;
+  top: 20px;
+  left: 0;
+  background: rgba(20, 20, 30, 0.95);
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  min-width: 160px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition: all 0.15s ease;
+  z-index: 50;
+}
+
+/* Show tooltip on hover */
+.dotWrapper:hover .dotTooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.tooltipTitle {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.tooltipRow {
+  margin-bottom: 4px;
+}
+
+.tooltipReason {
+  margin-top: 6px;
+  opacity: 0.7;
+}
+
+.lastSeenCell {
+  display: flex;
+  flex-direction: column;
+}
+
+.lastSeenRelative {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.lastSeenAbsolute {
+  font-size: 11px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+/* Center headers */
+.hostTable th {
+  text-align: center;
+}
+
+/* Center all table cells */
+.hostTable td {
+  text-align: center;
+  vertical-align: middle;
+}
+.tagsWrapper {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  position: relative;
+}
+
+.tagPill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  white-space: nowrap;
+}
+
+.moreTagsWrapper {
+  position: relative;
+}
+
+.tagMore {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.tagsTooltip {
+  position: absolute;
+  top: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(20, 20, 30, 0.95);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  min-width: 150px;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.15s ease;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 50;
+}
+
+/* Show on hover */
+.moreTagsWrapper:hover .tagsTooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(-2px);
+}
+
+.hostTable thead th {
+  text-align: center !important;
+}
+
+.hostTable tbody td {
+  text-align: center;
+}

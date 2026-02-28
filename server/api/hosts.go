@@ -8,54 +8,59 @@ import (
 
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
 )
 
 func HostsHandler(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
 		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
-
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
 			return
 		}
 
-		agents, err := st.ListAgents(tenantID)
+		agents, err := st.ListAgents(r.Context(), tenantID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
 			return
 		}
 
-		json.NewEncoder(w).Encode(agents)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(agents)
 	}
 }
 
 func HostSummaryHandler(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
 		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
-
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
 			return
 		}
 
-		data, err := st.GetLatestHostMetrics(tenantID)
+		data, err := st.GetLatestHostMetrics(r.Context(), tenantID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
 			return
 		}
 
-		json.NewEncoder(w).Encode(data)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(data)
 	}
 }
 
 func extractPublicIP(r *http.Request) string {
-	// Check X-Forwarded-For (can contain multiple IPs)
 	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
 		parts := strings.Split(forwarded, ",")
 		return strings.TrimSpace(parts[0])
 	}
 
-	// Fallback to RemoteAddr
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil {
 		return host

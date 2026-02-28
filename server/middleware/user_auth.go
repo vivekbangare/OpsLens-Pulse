@@ -8,6 +8,7 @@ import (
 
 	"opslense-pulse/server/auth"
 	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
 )
 
 func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.Handler {
@@ -15,9 +16,11 @@ func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.H
 
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
+			reqID := GetRequestID(r.Context())
+
 			header := r.Header.Get("Authorization")
 			if !strings.HasPrefix(header, "Bearer ") {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing bearer token", reqID)
 				return
 			}
 
@@ -25,13 +28,13 @@ func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.H
 
 			claims, err := jwtManager.Validate(tokenStr)
 			if err != nil {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid token", reqID)
 				return
 			}
 
 			tenantID := claims.TenantID
 			if tenantID == "" {
-				http.Error(w, "tenant missing in token", http.StatusUnauthorized)
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing in token", reqID)
 				return
 			}
 
@@ -45,17 +48,17 @@ func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.H
 			`, claims.UserID, tenantID).Scan(&tenantID)
 
 			if err == sql.ErrNoRows {
-				http.Error(w, "forbidden", http.StatusForbidden)
+				utils.WriteError(w, http.StatusForbidden, "forbidden", "access denied", reqID)
 				return
 			}
 			if err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
+				utils.WriteError(w, http.StatusInternalServerError, "internal_error", "database error", reqID)
 				return
 			}
 
 			permissions, err := store.LoadUserPermissions(db, claims.UserID, tenantID)
 			if err != nil {
-				http.Error(w, "permission load failed", 500)
+				utils.WriteError(w, http.StatusInternalServerError, "internal_error", "permission load failed", reqID)
 				return
 			}
 

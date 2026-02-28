@@ -4,112 +4,174 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"runtime"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-type ServerConfig struct {
-	ListenPort int `yaml:"listen_port"`
+const DefaultPath = "/etc/opslens-pulse/server-config.yaml"
+
+type Config struct {
+	Server     ServerSection     `yaml:"server"`
+	ClickHouse ClickHouseSection `yaml:"clickhouse"`
+	Postgres   PostgresSection   `yaml:"postgres"`
+	Security   SecuritySection   `yaml:"security"`
+	Logging    LoggingSection    `yaml:"logging"`
 }
 
-type ClickHouseConfig struct {
+type ServerSection struct {
+	ListenPort      int `yaml:"listen_port"`
+	ReadTimeoutSec  int `yaml:"read_timeout_sec"`
+	WriteTimeoutSec int `yaml:"write_timeout_sec"`
+	IdleTimeoutSec  int `yaml:"idle_timeout_sec"`
+	MaxHeaderBytes  int `yaml:"max_header_bytes"`
+
+	RateLimit struct {
+		Requests  int `yaml:"requests"`
+		WindowSec int `yaml:"window_sec"`
+	} `yaml:"rate_limit"`
+}
+
+type ClickHouseSection struct {
 	Host     string `yaml:"host"`
 	Port     int    `yaml:"port"`
 	User     string `yaml:"user"`
-	Password string `yaml:"password"`
 	Database string `yaml:"database"`
+
+	Password string `yaml:"-"`
+
+	// Production tuning
+	MaxOpenConns       int `yaml:"max_open_conns"`
+	MaxIdleConns       int `yaml:"max_idle_conns"`
+	ConnMaxLifetimeMin int `yaml:"conn_max_lifetime_min"`
+
+	ConnectRetries int `yaml:"connect_retries"`
+	RetryDelaySec  int `yaml:"retry_delay_sec"`
 }
 
-func LoadClickHouse() ClickHouseConfig {
-	cfg := ClickHouseConfig{
-		Host:     os.Getenv("CLICKHOUSE_HOST"),
-		Port:     9000,
-		User:     os.Getenv("CLICKHOUSE_USER"),
-		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
-		Database: os.Getenv("CLICKHOUSE_DATABASE"),
-	}
-	if port := os.Getenv("CLICKHOUSE_PORT"); port != "" {
-		fmt.Sscanf(port, "%d", &cfg.Port)
-	}
-	return cfg
+type PostgresSection struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Database string `yaml:"database"`
+
+	// Not from YAML
+	Password string `yaml:"-"`
+
+	// Production settings
+	SSLMode            string `yaml:"ssl_mode"` // disable | require | verify-full
+	MaxOpenConns       int    `yaml:"max_open_conns"`
+	MaxIdleConns       int    `yaml:"max_idle_conns"`
+	ConnMaxLifetimeMin int    `yaml:"conn_max_lifetime_min"`
+	ConnectRetries     int    `yaml:"connect_retries"`
+	RetryDelaySec      int    `yaml:"retry_delay_sec"`
 }
 
-func (c ClickHouseConfig) DSN() string {
-	if c.Database == "" {
-		c.Database = "default"
-	}
-	return fmt.Sprintf(
-		"tcp://%s:%d/%s?username=%s&password=%s",
-		c.Host,
-		c.Port,
-		c.Database,
-		c.User,
-		c.Password,
-	)
+type SecuritySection struct {
+	MaxBodyMB   int    `yaml:"max_body_mb"`
+	JWTSecret   string `yaml:"-"`
+	JWTIssuer   string `yaml:"jwt_issuer"`
+	JWTAudience string `yaml:"jwt_audience"`
 }
 
-var DefaultPath string
-
-func init() {
-	if runtime.GOOS == "windows" {
-		DefaultPath = `C:\ProgramData\OpsLens-Pulse\server-config.yaml`
-	} else {
-		DefaultPath = "/etc/opslens-pulse/server-config.yaml"
-	}
+type LoggingSection struct {
+	Level string `yaml:"level"`
 }
 
-// LoadOrCreate returns: ServerConfig, path, created(bool), error
-func LoadOrCreate(path string) (ServerConfig, string, bool, error) {
-	var cfg ServerConfig
+func resolveSecret(envKey string, defaultFile string) (string, error) {
 
-	if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
-		path = env
+	// 1️⃣ ENV override (Docker / K8s)
+	if v := os.Getenv(envKey); v != "" {
+		return v, nil
 	}
+
+	// 2️⃣ Secret file (On-Prem / Mounted secret)
+	if _, err := os.Stat(defaultFile); err == nil {
+		b, err := os.ReadFile(defaultFile)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+
+	return "", fmt.Errorf("%s not configured", envKey)
+}
+
+func Load(path string) (*Config, error) {
+
 	if path == "" {
-		path = DefaultPath
-	}
-
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// create default config
-		cfg = ServerConfig{
-			ListenPort: 9898,
+		if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
+			path = env
+		} else {
+			path = DefaultPath
 		}
-		if err := save(path, cfg); err != nil {
-			return cfg, path, false, err
-		}
-
-		return cfg, path, true, nil
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return cfg, path, false, err
+		return nil, err
 	}
 	defer f.Close()
 
-	err = yaml.NewDecoder(f).Decode(&cfg)
-	return cfg, path, false, err
-}
-
-func save(path string, cfg ServerConfig) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return err
+	cfg := &Config{}
+	if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 
+	// 🔐 Resolve Secrets
+
+	cfg.Security.JWTSecret, err = resolveSecret(
+		"JWT_SECRET",
+		"/etc/opslens-pulse/secrets/jwt.secret",
+	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer f.Close()
 
-	return yaml.NewEncoder(f).Encode(cfg)
+	cfg.Postgres.Password, err = resolveSecret(
+		"POSTGRES_PASSWORD",
+		"/etc/opslens-pulse/secrets/postgres.secret",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.ClickHouse.Password, err = resolveSecret(
+		"CLICKHOUSE_PASSWORD",
+		"/etc/opslens-pulse/secrets/clickhouse.secret",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg, cfg.Validate()
 }
 
-func (c ServerConfig) Validate() error {
-	if c.ListenPort <= 0 || c.ListenPort > 65535 {
-		return errors.New("listen_port must be between 1 and 65535")
+func (c *Config) Validate() error {
+
+	if c.Server.ListenPort <= 0 || c.Server.ListenPort > 65535 {
+		return errors.New("invalid listen_port")
 	}
+
+	if c.Security.JWTSecret == "" {
+		return errors.New("JWT secret missing")
+	}
+
+	if c.Security.JWTIssuer == "" {
+		return errors.New("jwt_issuer missing")
+	}
+
+	if c.Security.JWTAudience == "" {
+		return errors.New("jwt_audience missing")
+	}
+
+	if c.Postgres.Host == "" {
+		return errors.New("postgres host missing")
+	}
+
+	if c.ClickHouse.Host == "" {
+		return errors.New("clickhouse host missing")
+	}
+
 	return nil
 }

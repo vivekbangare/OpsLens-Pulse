@@ -1,0 +1,13 @@
+[data-theme="light"] {
+  --bg-primary: #f5f7fb;
+  --bg-secondary: #ffffff;
+  --bg-card: rgba(255,255,255,0.8);
+
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --text-muted: #6b7280;
+
+  --border-color: rgba(0,0,0,0.08);
+
+  --shadow-soft: 0 10px 30px rgba(0,0,0,0.06);
+}

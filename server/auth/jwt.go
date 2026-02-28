@@ -8,12 +8,16 @@ import (
 )
 
 type JWTManager struct {
-	secret []byte
+	secret   []byte
+	issuer   string
+	audience string
 }
 
-func NewJWTManager(secret string) *JWTManager {
+func NewJWTManager(secret, issuer, audience string) *JWTManager {
 	return &JWTManager{
-		secret: []byte(secret),
+		secret:   []byte(secret),
+		issuer:   issuer,
+		audience: audience,
 	}
 }
 
@@ -33,6 +37,7 @@ func (j *JWTManager) Generate(
 	permissions []string,
 	isSuperAdmin bool,
 ) (string, error) {
+
 	claims := Claims{
 		UserID:       userID,
 		Username:     username,
@@ -40,6 +45,10 @@ func (j *JWTManager) Generate(
 		Permissions:  permissions,
 		IsSuperAdmin: isSuperAdmin,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    j.issuer,
+			Audience:  []string{j.audience},
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 		},
 	}
@@ -49,12 +58,19 @@ func (j *JWTManager) Generate(
 }
 
 func (j *JWTManager) Validate(tokenStr string) (*Claims, error) {
+
 	token, err := jwt.ParseWithClaims(
 		tokenStr,
 		&Claims{},
 		func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.New("unexpected signing method")
+			}
 			return j.secret, nil
 		},
+		jwt.WithIssuer(j.issuer),
+		jwt.WithAudience(j.audience),
+		jwt.WithLeeway(2*time.Minute), // clock skew tolerance
 	)
 
 	if err != nil {

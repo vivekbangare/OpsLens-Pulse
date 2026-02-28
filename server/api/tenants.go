@@ -4,15 +4,25 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+
 	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/utils"
 )
 
 func MyTenantsHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
+		reqID := middleware.GetRequestID(r.Context())
+
 		userID, ok := r.Context().Value(middleware.CtxUserID).(string)
-		if !ok {
-			http.Error(w, "user id not found in context", 500)
+		if !ok || userID == "" {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				"user id not found in context",
+				reqID,
+			)
 			return
 		}
 
@@ -23,9 +33,14 @@ func MyTenantsHandler(db *sql.DB) http.HandlerFunc {
 			WHERE ut.user_id = $1
 			  AND t.is_active = true
 		`, userID)
-
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
 			return
 		}
 		defer rows.Close()
@@ -44,7 +59,18 @@ func MyTenantsHandler(db *sql.DB) http.HandlerFunc {
 				tenants = append(tenants, t)
 			}
 		}
+		if err := rows.Err(); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
 
-		json.NewEncoder(w).Encode(tenants)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tenants)
 	}
 }

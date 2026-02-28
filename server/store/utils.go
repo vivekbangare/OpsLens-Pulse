@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 )
 
-func hashAPIKey(rawKey string) string {
+func HashAPIKey(rawKey string) string {
 	sum := sha256.Sum256([]byte(rawKey))
 	return hex.EncodeToString(sum[:])
 }

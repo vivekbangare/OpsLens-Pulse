@@ -1,30 +1,77 @@
+version: "1"
+
 server:
   url: http://server:9898
-  api_key: opl_ecdd8b56f395948b4682be3be39a59d817207bd93ccd67b434cef38793731ed9
+  api_key: opl_91ef2ed232ff991b734c3800701c7058147d62abd85fddc7f8dba30a7ee41073
+  insecure_skip_verify: false
 
 agent:
   interval_seconds: 5
   self_upgrade: false
   log_collection_interval_seconds: 5
+
+  # Services to monitor (crash detection enabled)
+  monitored_services:
+    - nginx
+    - ssh
+
   logs:
+
+    # =========================
+    # Application log (single file)
+    # =========================
     - name: random_app_log
       type: file
       path: /logs/random.log
+
+    # =========================
+    # System directory logs
+    # =========================
     - name: system_logs
       type: directory
       path: /var/log
       include:
         - syslog
         - auth.log
+        - messages
       exclude:
         - "*.gz"
+        - "*.old"
+
+    # =========================
+    # Systemd journal (Linux)
+    # =========================
+    - name: journal_logs
+      type: journal
+
+    # =========================
+    # Kernel logs
+    # =========================
     - name: kernel_logs
-      type: command
-      command: dmesg --ctime
-  
+      type: dmesg
+
+    # =========================
+    # Windows Event Logs (Windows only)
+    # =========================
+    # Uncomment below when running on Windows
+    #
+    # - name: windows_application
+    #   type: windows-event
+    #   channel: Application
+    #
+    # - name: windows_system
+    #   type: windows-event
+    #   channel: System
+    #
+    # - name: windows_security
+    #   type: windows-event
+    #   channel: Security
+
 tags:
   env: preprod
   region: us-west-1
   role: go-agent
   name: agent-config1
   owner: team-a
+  product: opslens-pulse
+  tier: backend

@@ -1,38 +1,71 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
 	"opslense-pulse/shared"
 )
 
 func HeartbeatHandler(st store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
 		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
-
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		var hb shared.Heartbeat
-		if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
-			http.Error(w, "invalid payload", 400)
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
 			return
 		}
 
-		// 🔒 enforce tenant from auth
+		var hb shared.Heartbeat
+		if err := utils.DecodeJSONStrict(r, &hb); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		if err := validation.ValidateHeartbeat(&hb); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		// 🔒 Enforce tenant from auth
 		hb.TenantID = tenantID
 
 		if hb.Timestamp.IsZero() {
 			hb.Timestamp = time.Now()
 		}
 
-		if err := st.UpsertAgentHeartbeat(hb); err != nil {
-			http.Error(w, err.Error(), 500)
+		if err := st.UpsertAgentHeartbeat(r.Context(), hb); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
 			return
 		}
 

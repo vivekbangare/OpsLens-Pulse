@@ -4,12 +4,16 @@ go 1.25.6
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.13.4
+	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/docker/docker v20.10.27+incompatible
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.11.2
+	github.com/nxadm/tail v1.4.11
 	github.com/shirou/gopsutil/v3 v3.24.5
 	golang.org/x/crypto v0.48.0
+	golang.org/x/sys v0.41.0
+	golang.org/x/time v0.11.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -21,6 +25,7 @@ require (
 	github.com/docker/distribution v2.8.2+incompatible // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
+	github.com/fsnotify/fsnotify v1.6.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -44,7 +49,8 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/time v0.11.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.27.1 // indirect
+	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 )

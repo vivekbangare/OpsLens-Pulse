@@ -1,88 +1,371 @@
 ===== FILE: ./vite.config.ts =====
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
 
-// https://vite.dev/config/
 export default defineConfig({
+  base: "/",
   plugins: [react()],
   build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ["react", "react-dom", "react-router-dom"],
-          charts: ["recharts"]
-        }
-      }
-    }
-  }
+    chunkSizeWarningLimit: 1000,
+  },
 })
-===== FILE: ./src/App.tsx =====
-import { Routes, Route, Navigate, useParams } from "react-router-dom"
-import { useAuth } from "./auth/AuthContext"
+===== FILE: ./src/main.tsx =====
+import ReactDOM from "react-dom/client"
+import { BrowserRouter } from "react-router-dom"
+import App from "./app/App"
+import "./styles/tokens.css"
+import "./styles/themes/light.css"
+import "./styles/themes/dark.css"
+import "./styles/base.css"
+import "./styles/layout.css"
+import "./styles/components.css"
+import { AuthProvider } from "./features/auth/AuthContext"
+import { SearchProvider } from "./context/SearchContext"
+import ErrorBoundary from "./shared/components/common/ErrorBoundary"
 
-import Login from "./pages/Login"
-import FleetOverview from "./pages/FleetOverview"
-import Hosts from "./pages/Hosts"
-import LogsExplorer from "./pages/logs/LogsExplorer"
-import Alerts from "./pages/Alerts"
-import Admin from "./pages/Admin"
-import HostDetails from "./pages/HostDetails"
-import AppLayout from "./layout/AppLayout"
 
-export default function App() {
-  const { token } = useAuth()
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <BrowserRouter>
+    <AuthProvider>
+      <SearchProvider>
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
+      </SearchProvider>
+    </AuthProvider>
+  </BrowserRouter>
+)
+===== FILE: ./src/context/SearchContext.tsx =====
+import { createContext, useContext, useState } from "react"
+
+interface SearchConfig {
+  placeholder: string
+  onSearch: (value: string) => void
+}
+
+interface SearchContextType {
+  config: SearchConfig | null
+  setSearchConfig: (config: SearchConfig | null) => void
+}
+
+const SearchContext = createContext<SearchContextType | undefined>(undefined)
+
+export function SearchProvider({ children }: { children: React.ReactNode }) {
+  const [config, setSearchConfig] = useState<SearchConfig | null>(null)
 
   return (
-    <Routes>
-      {/* ---------------- PUBLIC ---------------- */}
-      {!token && (
-        <Route path="*" element={<Login />} />
-      )}
+    <SearchContext.Provider value={{ config, setSearchConfig }}>
+      {children}
+    </SearchContext.Provider>
+  )
+}
 
-      {/* ---------------- PROTECTED ---------------- */}
-      {token && (
+export function useSearch() {
+  const ctx = useContext(SearchContext)
+  if (!ctx) throw new Error("useSearch must be used inside SearchProvider")
+  return ctx
+}
+
+===== FILE: ./src/app/App.tsx =====
+import AppRoutes from "./AppRoutes"
+
+export default function App() {
+  return <AppRoutes />
+}
+===== FILE: ./src/app/ProtectedRoute.tsx =====
+import { Navigate, Outlet } from "react-router-dom"
+import { useAuth } from "../features/auth/AuthContext"
+
+export default function ProtectedRoute() {
+  const { isAuthenticated } = useAuth()
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+
+  return <Outlet />
+}
+===== FILE: ./src/app/AppRoutes.tsx =====
+import { Routes, Route, Navigate } from "react-router-dom"
+
+import AppLayout from "../layout/AppLayout"
+import Login from "../features/auth/Login"
+import FleetPage from "../features/fleet/FleetPage"
+import Hosts from "../features/hosts/Hosts"
+import HostDetails from "../features/hosts/HostDetails"
+import LogsExplorer from "../features/logs/LogExplores"
+import Alerts from "../features/alerts/Alerts"
+import Admin from "../features/admin/Admin"
+import ProtectedRoute from "./ProtectedRoute"
+import AIPage from "../features/ai/AIPage"
+
+export default function AppRoutes() {
+  return (
+    <Routes>
+      {/* Public */}
+      <Route path="/login" element={<Login />} />
+
+      {/* Protected */}
+      <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
-          <Route index element={<Navigate to="fleet" />} />
-          <Route path="fleet" element={<FleetOverview />} />
+          <Route index element={<Navigate to="/fleet" replace />} />
+          <Route path="fleet" element={<FleetPage />} />
           <Route path="hosts" element={<Hosts />} />
           <Route path="hosts/:agentId" element={<HostDetailsWrapper />} />
           <Route path="logs" element={<LogsExplorer />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="admin" element={<Admin />} />
-          <Route path="*" element={<Navigate to="fleet" />} />
+          <Route path="ai" element={<AIPage />} />
         </Route>
-      )}
+      </Route>
+
+      {/* Fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )
 }
 
 function HostDetailsWrapper() {
-  const { agentId } = useParams()
-
+  const { agentId } = require("react-router-dom").useParams()
   if (!agentId) return null
-
   return <HostDetails agentId={agentId} />
 }
+===== FILE: ./src/app/providers.tsx =====
 
-===== FILE: ./src/main.tsx =====
-import ReactDOM from "react-dom/client"
-import { BrowserRouter } from "react-router-dom"
-import App from "./App"
-import "./styles/dashboard.css"
-import ErrorBoundary from "./components/ErrorBoundary"
-import { AuthProvider } from "./auth/AuthContext"
+===== FILE: ./src/layout/Topbar.tsx =====
+export default function Topbar() {
+  return (
+    <div className="topbar">
+      <div className="search">
+        <input placeholder="Search hosts, logs..." />
+      </div>
+      <button
+        onClick={() =>
+          document.documentElement.setAttribute(
+            "data-theme",
+            document.documentElement.getAttribute("data-theme") === "dark"
+              ? "light"
+              : "dark"
+          )
+        }
+      >
+        Toggle Theme
+      </button>
+      <div className="user">
+        <div className="avatar">A</div>
+      </div>
+    </div>
+  )
+}
+===== FILE: ./src/layout/AppLayout.tsx =====
+import Sidebar from "./Sidebar"
+import Topbar from "./Topbar"
+import { Outlet } from "react-router-dom"
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <BrowserRouter>
-    <AuthProvider>
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
-    </AuthProvider>
-  </BrowserRouter>
-)
+export default function AppLayout() {
+  return (
+    <div className="layout">
+      <Sidebar />
+      <div className="contentArea">
+        <Topbar />
+        <div className="pageContainer">
+          <Outlet />
+        </div>
+      </div>
+    </div>
+  )
+}
 
-===== FILE: ./src/auth/AuthContext.tsx =====
+===== FILE: ./src/layout/Sidebar.tsx =====
+import { NavLink } from "react-router-dom"
+
+export default function Sidebar() {
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <h1>OpsLens</h1>
+        <span>Fleet Monitoring</span>
+      </div>
+
+      <nav className="nav">
+        <p className="navTitle">Overview</p>
+
+        <NavLink to="/fleet" className={({ isActive }) => isActive ? "active" : ""}>
+          Fleet Overview
+        </NavLink>
+
+        <NavLink to="/alerts" className={({ isActive }) => isActive ? "active" : ""}>
+          Alerts
+        </NavLink>
+
+        <p className="navTitle">Infrastructure</p>
+
+        <NavLink to="/hosts" className={({ isActive }) => isActive ? "active" : ""}>
+          Hosts
+        </NavLink>
+
+        <NavLink to="/logs" className={({ isActive }) => isActive ? "active" : ""}>
+          Log Explorer
+        </NavLink>
+
+        <p className="navTitle">Intelligence</p>
+
+        <NavLink to="/ai" className={({ isActive }) => isActive ? "active" : ""}>
+          AI Insights
+        </NavLink>
+
+         <p className="navTitle">Admin</p>
+
+        <NavLink to="/admin" className={({ isActive }) => isActive ? "active" : ""}>
+          Admin
+        </NavLink>
+      </nav>
+    </aside>
+  )
+}
+===== FILE: ./src/features/auth/Login.tsx =====
+import { useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { useAuth } from "../auth/AuthContext"
+import { loginRequest } from "./api"
+
+function parseJwt(token: string) {
+  try {
+    const base64Url = token.split(".")[1]
+    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/")
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((c) =>
+          "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)
+        )
+        .join("")
+    )
+    return JSON.parse(jsonPayload)
+  } catch {
+    return null
+  }
+}
+
+export default function Login() {
+  const { login } = useAuth()
+  const navigate = useNavigate()
+
+  const [username, setUsername] = useState("")
+  const [password, setPassword] = useState("")
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+
+    setLoading(true)
+    setError("")
+
+    try {
+      // const res = await fetch("/api/login", {
+      //   method: "POST",
+      //   headers: { "Content-Type": "application/json" },
+      //   body: JSON.stringify({ username, password }),
+      // })
+
+      // if (!res.ok) {
+      //   throw new Error("Invalid credentials")
+      // }
+
+      // const data = await res.json()
+
+      const data = await loginRequest(username, password)
+
+      if (!data.token) {
+        throw new Error("Token missing in response")
+      }
+
+      // 🔥 Decode token
+      const payload = parseJwt(data.token)
+      console.log("JWT PAYLOAD:", payload)
+
+      if (!payload) {
+        throw new Error("Invalid token payload")
+      }
+
+      login({
+        token: data.token,
+        user: {
+          id: payload.sub || "1",
+          username: payload.username || payload.sub || "admin",
+          email: payload.email || "",
+          is_super_admin: payload.is_super_admin || false,
+          tenants: payload.tenants || [],
+          currentTenantId:
+            payload.currentTenantId ||
+            payload.current_tenant_id ||
+            payload.tenants?.[0]?.id ||
+            null,
+        },
+      })
+
+      navigate("/fleet")
+    } catch (err: any) {
+      console.error("LOGIN ERROR:", err)
+      setError(err.message || "Login failed")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="login-page-wrapper">
+      <div className="login-container">
+        <h1>OpsLens</h1>
+        <p style={{ opacity: 0.7, marginBottom: "20px" }}>
+          Sign in to continue
+        </p>
+
+        <form onSubmit={handleSubmit}>
+          <input
+            type="text"
+            placeholder="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+
+          <input
+            type="password"
+            placeholder="Password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+
+          <button type="submit" disabled={loading}>
+            {loading ? "Signing in..." : "Login"}
+          </button>
+        </form>
+
+        {error && (
+          <div style={{ marginTop: "14px", color: "#FF4D6D" }}>
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+===== FILE: ./src/features/auth/api.ts =====
+import { apiPost } from "../../shared/lib/api/client"
+
+export async function loginRequest(
+  username: string,
+  password: string
+) {
+  return apiPost("/api/login", {
+    username,
+    password,
+  })
+}
+===== FILE: ./src/features/auth/AuthContext.tsx =====
 import {
   createContext,
   useContext,
@@ -220,190 +503,1226 @@ export function useAuth(): AuthContextType {
   return ctx
 }
 
-===== FILE: ./src/layout/Topbar.tsx =====
+===== FILE: ./src/features/admin/Admin.tsx =====
+import { NavLink, Routes, Route } from "react-router-dom"
+
+
+export default function Admin() {
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Admin Panel</h2>
+
+      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
+        <h3>Tenants</h3>
+        <p>Tenant management UI coming soon.</p>
+      </div>
+
+      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
+        <h3>Users</h3>
+        <p>User management UI coming soon.</p>
+      </div>
+
+      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
+        <h3>Roles</h3>
+        <p>Role management UI coming soon.</p>
+      </div>
+    </div>
+  )
+}
+
+
+===== FILE: ./src/features/alerts/Alerts.tsx =====
+export default function Alerts() {
+  return (
+    <div style={{ padding: "20px" }}>
+      <h2>Alerts</h2>
+      <p>No alerts configured yet.</p>
+    </div>
+  )
+}
+
+===== FILE: ./src/features/dashboard/components/MiniChart.tsx =====
+
+===== FILE: ./src/features/dashboard/components/KPIGrid.tsx =====
+
+===== FILE: ./src/features/dashboard/DashboardPage.tsx =====
+
+===== FILE: ./src/features/logs/LogExplores.tsx =====
+import { useEffect, useState } from "react"
+import LogsToolbar from "./components/LogsToolbar"
+import LogsTimeline from "./components/LogsTimeline"
+import LogsTable from "./components/LogsTable"
+import LogDetailsModal from "./components/LogDetailsModal"
+import { searchLogs, fetchLogsTimeline } from "./api"
+import { useSearch } from "../../context/SearchContext"
+
+export default function LogsExplorer() {
+  const PAGE_SIZE = 50
+
+  const [logs, setLogs] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [selectedLog, setSelectedLog] = useState<any>(null)
+
+  const [timeRange, setTimeRange] = useState<{
+    from: string
+    to: string
+  } | null>(null)
+
+  const [level, setLevel] = useState("")
+  const [source, setSource] = useState("")
+  const [query, setQuery] = useState("")
+  const [timelineData, setTimelineData] = useState<any[]>([])
+  const [timelineAnomaly, setTimelineAnomaly] = useState(false)
+
+  const { setSearchConfig } = useSearch()
+
+  // -----------------------------------
+  // Register global search bar
+  // -----------------------------------
+  useEffect(() => {
+    setSearchConfig({
+      placeholder: "Search message, level, container...",
+      onSearch: (value: string) => {
+        setQuery(value)
+      }
+    })
+
+    return () => setSearchConfig(null)
+  }, [setSearchConfig])
+
+  // -----------------------------------
+  // Default time range (last 15 mins)
+  // -----------------------------------
+  useEffect(() => {
+    const now = new Date()
+    const past = new Date(now.getTime() - 15 * 60 * 1000)
+
+    setTimeRange({
+      from: past.toISOString(),
+      to: now.toISOString(),
+    })
+  }, [])
+
+  // -----------------------------------
+  // Load logs when filters change
+  // -----------------------------------
+  useEffect(() => {
+    if (!timeRange) return
+
+    loadLogs()
+    loadTimeline()
+  }, [timeRange, level, source, query])
+
+  // -----------------------------------
+  // Load Logs (single page only)
+  // -----------------------------------
+  async function loadLogs() {
+    if (!timeRange) return
+
+    try {
+      setLoading(true)
+
+      const data = await searchLogs({
+        from: timeRange.from,
+        to: timeRange.to,
+        level,
+        source,
+        query,
+        limit: PAGE_SIZE,
+      })
+
+      setLogs(Array.isArray(data) ? data : [])
+
+    } catch (err) {
+      console.error("Log load error:", err)
+      setLogs([])
+    } finally {
+      setLoading(false)
+    }
+  }
+  async function loadTimeline() {
+  if (!timeRange) return
+
+  try {
+    const result = await fetchLogsTimeline({
+      from: timeRange.from,
+      to: timeRange.to,
+      source_type: source || undefined,
+    })
+
+    setTimelineData(result.points || [])
+    setTimelineAnomaly(result.anomaly || false)
+
+  } catch (err) {
+    console.error("Timeline load error:", err)
+    setTimelineData([])
+    setTimelineAnomaly(false)
+  }
+}
+
+
+
+  return (
+    <div className="logsPage">
+
+      {/* Top Controls */}
+      <LogsToolbar
+        level={level}
+        onRangeChange={(from, to) => setTimeRange({ from, to })}
+        onLevelChange={setLevel}
+        onSourceChange={setSource}
+        onSearchChange={setQuery}
+      />
+
+      <LogsTimeline
+        data={timelineData}
+        anomaly={timelineAnomaly}
+      />
+
+      {/* Split Layout */}
+      <div className="logsMainLayout">
+
+        {/* LEFT: Logs Table (scroll inside only) */}
+        <div className="logsLeftPanel">
+          <LogsTable
+            logs={logs}
+            loading={loading}
+            onSelect={setSelectedLog}
+          />
+        </div>
+
+        {/* Popup Modal */}
+        {selectedLog && (
+          <LogDetailsModal
+            log={selectedLog}
+            onClose={() => setSelectedLog(null)}
+          />
+        )}
+
+      </div>
+    </div>
+  )
+}
+
+
+===== FILE: ./src/features/logs/logs.ts =====
+export interface TimelinePoint {
+  bucket: string
+  total: number
+  errors: number
+  warnings: number
+  error_rate: number
+}
+
+export interface TimelineResult {
+  points: TimelinePoint[]
+  anomaly: boolean
+}
+
+===== FILE: ./src/features/logs/api.ts =====
+import { apiGet, apiPost } from "../../shared/lib/api/client"
+
+export async function searchLogs(params: any) {
+  return apiPost("/api/logs/search", params)
+}
+
+export async function fetchLogsTimeline(params: {
+  from: string
+  to: string
+  source_type?: string
+}) {
+  const query = new URLSearchParams({
+    from: params.from,
+    to: params.to,
+  })
+
+  if (params.source_type) {
+    query.append("source_type", params.source_type)
+  }
+
+  return apiGet(`/api/logs/timeline?${query.toString()}`)
+}
+===== FILE: ./src/features/logs/types.ts =====
+
+===== FILE: ./src/features/logs/components/TimeRangePicker.tsx =====
 import { useState } from "react"
-import { useAuth } from "../auth/AuthContext"
+import DatePicker from "react-datepicker"
+import "react-datepicker/dist/react-datepicker.css"
 
-export default function TopBar() {
-  const { user, logout } = useAuth()
-  const [open, setOpen] = useState(false)
+interface Props {
+  onApply: (from: string, to: string) => void
+  disabled?: boolean
+}
+
+export default function TimeRangePicker({ onApply, disabled }: Props) {
+  const [startDate, setStartDate] = useState<Date | null>(null)
+  const [endDate, setEndDate] = useState<Date | null>(null)
+
+  function handleApply() {
+    if (!startDate || !endDate) return
+    if (startDate > endDate) {
+      alert("Start date cannot be after end date")
+      return
+    }
+
+    onApply(
+      startDate.toISOString(),
+      endDate.toISOString()
+    )
+  }
 
   return (
-    <div className="topbar">
+    <div className="timeRangePicker">
 
-      {/* LEFT */}
-      <div className="topbarLeft">
-        <div className="search">
-          <input placeholder="Search hosts, logs..." />
-          <span className="kbd">⌘ K</span>
-        </div>
+      <DatePicker
+        disabled={disabled}
+        selected={startDate}
+        onChange={(date: Date | null) => setStartDate(date)}
+        showTimeSelect
+        timeFormat="HH:mm"
+        timeIntervals={5}
+        dateFormat="yyyy-MM-dd HH:mm"
+        placeholderText="Start"
+        maxDate={new Date()}
+        popperPlacement="bottom-start"
+        portalId="root"
+        popperClassName="darkDatePicker"
+        calendarClassName="darkCalendar"
+      />
+
+      <DatePicker
+        disabled={disabled}
+        selected={endDate}
+        onChange={(date: Date | null) => setEndDate(date)}
+        showTimeSelect
+        timeFormat="HH:mm"
+        timeIntervals={5}
+        dateFormat="yyyy-MM-dd HH:mm"
+        placeholderText="End"
+        maxDate={new Date()}
+        popperPlacement="bottom-start"
+        portalId="root"
+        popperClassName="darkDatePicker"
+        calendarClassName="darkCalendar"
+      />
+
+      <button 
+        disabled={disabled}
+        onClick={handleApply} 
+        className="btn secondary"
+    >
+        Apply
+      </button>
+
+    </div>
+  )
+}
+
+===== FILE: ./src/features/logs/components/LogsTable.tsx =====
+import { useState } from "react"
+
+interface LogsTableProps {
+  logs: any[]
+  loading: boolean
+  onSelect: (log: any) => void
+}
+
+function formatTime(ts: number) {
+  const d = new Date(ts * 1000)
+  return d.toLocaleString()
+}
+
+function preview(text: string, limit = 75) {
+  if (!text) return ""
+  return text.length > limit
+    ? text.slice(0, limit) + "..."
+    : text
+}
+
+function levelClass(level: string) {
+  switch (level?.toUpperCase()) {
+    case "ERROR":
+      return "logLevel error"
+    case "WARN":
+      return "logLevel warn"
+    case "INFO":
+      return "logLevel info"
+    default:
+      return "logLevel default"
+  }
+}
+
+export default function LogsTable({
+  logs,
+  loading,
+  onSelect,
+}: LogsTableProps) {
+
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+
+  if ((!logs || logs.length === 0) && !loading) {
+    return (
+      <div className="logsTable emptyState">
+        No logs found
+      </div>
+    )
+  }
+
+  return (
+    <div className="logsTable">
+
+      {/* Header */}
+      <div className="logHeader">
+        <div className="logTime">Time</div>
+        <div className="logLevelHeader">Level</div>
+        <div className="logSource">Source</div>
+        <div className="logMessage">Message</div>
       </div>
 
-      {/* RIGHT */}
-      <div className="topbarRight">
-
-        {/* Notification */}
-        <div className="notification">🔔</div>
-
-        {/* User Dropdown */}
-        <div className="userWrapper" onClick={() => setOpen(!open)}>
-          <div className="avatar">
-            {user?.username?.charAt(0).toUpperCase()}
-          </div>
-
-          <span className="username">{user?.username}</span>
-
-          {open && (
-            <div className="dropdown">
-
-              <div className="dropdownItem">Profile</div>
-              <div className="dropdownItem">Settings</div>
-              <div className="dropdownSub">
-                <div className="dropdownItem">API Tokens</div>
-                <div className="dropdownItem">Change Password</div>
-              </div>
-
-              <div className="divider"></div>
-
-              <div className="dropdownItem logout" onClick={logout}>
-                Logout
-              </div>
-
+      {/* Scrollable Body */}
+      <div className="logBody">
+        {logs.map((log, i) => (
+          <div
+            key={i}
+            className={`logRow ${selectedIndex === i ? "selected" : ""}`}
+            onClick={() => {
+              setSelectedIndex(i)
+              onSelect(log)
+            }}
+          >
+            <div className="logTime">
+              {formatTime(log.ts)}
             </div>
-          )}
-        </div>
 
-      </div>
-    </div>
-  )
-}
+            <div className={levelClass(log.level)}>
+              {log.level}
+            </div>
 
-===== FILE: ./src/layout/AppLayout.tsx =====
-import Sidebar from "./Sidebar"
-import Topbar from "./Topbar"
-import { Outlet } from "react-router-dom"
+            <div className="logSource">
+              {log.source_name}
+            </div>
 
-export default function AppLayout() {
-  return (
-    <div className="app">
-      <Sidebar />
-      <main className="main">
-        <Topbar />
-        <Outlet />
-      </main>
-    </div>
-  )
-}
+            <div className="logMessage">
+              {preview(log.message)}
+            </div>
+          </div>
+        ))}
 
-===== FILE: ./src/layout/Layout.tsx =====
-
-===== FILE: ./src/layout/Sidebar.tsx =====
-import { NavLink } from "react-router-dom"
-import { useAuth } from "../auth/AuthContext"
-
-export default function Sidebar() {
-  const { user, updateTenant } = useAuth()
-
-  const tenants = user?.tenants || []
-  const currentTenant = tenants.find(
-    (t) => t.id === user?.currentTenantId
-  )
-  const hasPermission = (perm: string) =>
-    user?.permissions?.includes(perm) || false
-
-  const canViewAdmin = user?.is_super_admin
-    // user?.permissions?.includes("users.read") ||
-    // user?.permissions?.includes("roles.read") ||
-    // user?.permissions?.includes("groups.read") ||
-
-  return (
-    <aside className="sidebar">
-      <div className="brand">
-        <div className="logo"></div>
-        <div>
-          <h1>OpsLens</h1>
-          <p>Fleet Monitoring</p>
-        </div>
-      </div>
-
-      {/* Navigation */}
-      <nav className="nav">
-        {/* Overview */}
-        <div className="navSection">
-          <p className="navTitle">Overview</p>
-          <NavLink to="/fleet">Fleet Overview</NavLink>
-        </div>
-
-        {/* Infrastructure */}
-        <div className="navSection">
-          <p className="navTitle">Infrastructure</p>
-          <NavLink to="/hosts">Hosts</NavLink>
-        </div>
-
-        {/* Observability */}
-        <div className="navSection">
-          <p className="navTitle">Observability</p>
-          <NavLink to="/logs/components">Log Explorer</NavLink>
-          <NavLink to="/alerts">Alerts</NavLink>
-        </div>
-
-        {/* Intelligence */}
-        <div className="navSection">
-          <p className="navTitle">Intelligence</p>
-          <NavLink to="/ai">AI Insights</NavLink>
-        </div>
-
-        {/* Administration */}
-        {canViewAdmin && (
-          <div className="navSection">
-            <p className="navTitle">Administration</p>
-
-            {user?.permissions?.includes("users.read") && (
-              <NavLink to="/admin/users">Users</NavLink>
-            )}
-
-            {user?.permissions?.includes("roles.read") && (
-              <NavLink to="/admin/roles">Roles</NavLink>
-            )}
-
-            {user?.permissions?.includes("groups.read") && (
-              <NavLink to="/admin/groups">Groups</NavLink>
-            )}
+        {loading && (
+          <div className="loadingMore">
+            Loading logs...
           </div>
         )}
-      </nav>
+      </div>
+    </div>
+  )
+}
 
-      {/* Tenant Switch */}
-      <div className="sidebarFooter">
-        {tenants.length <= 1 ? (
-          <div className="tenantName">
-            {currentTenant?.name || "Default Tenant"}
+===== FILE: ./src/features/logs/components/LogsTimeline.tsx =====
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts"
+
+interface Props {
+  data: any[]
+  anomaly: boolean
+  onBucketClick?: (bucket: string) => void
+}
+
+export default function LogsTimeline({ data, anomaly }: Props) {
+
+  const formatted = data.map((p) => ({
+    time: new Date(p.bucket).toLocaleTimeString(),
+    total: p.total,
+    errorRate: +(p.error_rate * 100).toFixed(2),
+  }))
+
+  return (
+    <div className="timelinePanel">
+
+      <div className="timelineHeader">
+        <h3>Log Volume</h3>
+        {anomaly && (
+          <span className="anomalyBadge">⚠ Spike Detected</span>
+        )}
+      </div>
+
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={formatted}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="time" />
+          <YAxis />
+          <Tooltip />
+
+          <Line
+            type="monotone"
+            dataKey="total"
+            stroke="#00f5d4"
+            strokeWidth={2}
+            dot={false}
+          />
+
+          <Line
+            type="monotone"
+            dataKey="errorRate"
+            stroke="#ff4d6d"
+            strokeWidth={2}
+            dot={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+===== FILE: ./src/features/logs/components/LogRow.tsx =====
+interface LogRowProps {
+  log: any
+  onClick: () => void
+}
+
+export default function LogRow({ log, onClick }: LogRowProps) {
+  const ts = log.timestamp || log.ts || "—"
+  const level = (log.level || "info").toLowerCase()
+  const source = log.hostname || log.source || "—"
+  const message = log.message || ""
+
+  return (
+    <div
+      className={`logRow ${level}`}
+      onClick={onClick}
+    >
+      <span className="ts">{ts}</span>
+      <span className="level">{level.toUpperCase()}</span>
+      <span className="source">{source}</span>
+      <span className="msg">{message}</span>
+    </div>
+  )
+}
+
+===== FILE: ./src/features/logs/components/LogDetailsModal.tsx =====
+import { useEffect } from "react"
+
+interface LogDetailsProps {
+  log: any
+  onClose: () => void
+}
+
+export default function LogDetailsModal({
+  log,
+  onClose,
+}: LogDetailsProps) {
+
+  // ESC key support
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose()
+      }
+    }
+
+    document.addEventListener("keydown", handleEsc)
+    return () => document.removeEventListener("keydown", handleEsc)
+  }, [onClose])
+
+  if (!log) return null
+
+  function formatTime(ts: number) {
+    const d = new Date(ts * 1000)
+    return d.toLocaleString()
+  }
+
+  function downloadAsTxt() {
+    const content = `
+Timestamp: ${formatTime(log.ts)}
+Agent ID: ${log.agent_id}
+Source: ${log.source_name}
+Level: ${log.level}
+
+Message:
+${log.message}
+    `
+
+    const blob = new Blob([content], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `log-${log.agent_id}-${log.ts}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="logModalOverlay" onClick={onClose}>
+
+      <div
+        className="logModalCentered"
+        onClick={(e) => e.stopPropagation()}  // prevent closing when clicking inside
+      >
+
+        {/* HEADER */}
+        <div className="modalHeader">
+          <h2>Log Details</h2>
+          <button className="closeBtn" onClick={onClose}>✕</button>
+        </div>
+
+        {/* META */}
+        <div className="modalMeta">
+          <div><strong>Timestamp:</strong> {formatTime(log.ts)}</div>
+          <div><strong>Agent:</strong> {log.agent_id}</div>
+          <div><strong>Source:</strong> {log.source_name}</div>
+          <div><strong>Level:</strong> {log.level}</div>
+        </div>
+
+        {/* FLEXIBLE MESSAGE */}
+        <div className="modalMessageFlexible">
+          <pre>{log.message}</pre>
+        </div>
+
+        {/* CENTERED ACTIONS */}
+        <div className="modalActionsCentered">
+          <button onClick={() => navigator.clipboard.writeText(log.message)}>
+            Copy
+          </button>
+
+          <button onClick={downloadAsTxt}>
+            Download .txt
+          </button>
+
+          <button onClick={() => window.location.href = `/hosts/${log.agent_id}`}>
+            Open Host
+          </button>
+
+          <button className="primary">
+            Explain with AI
+          </button>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
+===== FILE: ./src/features/logs/components/LogsToolbar.tsx =====
+import { useState } from "react"
+import TimeRangePicker from "./TimeRangePicker"
+
+interface Props {
+  onRangeChange: (from: string, to: string) => void
+  onLevelChange: (level: string) => void
+  onSourceChange: (source: string) => void
+  onSearchChange: (query: string) => void
+  level: string
+}
+
+export default function LogsToolbar({
+  onRangeChange,
+  onLevelChange,
+  onSourceChange,
+  onSearchChange,
+  level,
+}: Props) {
+
+  const [preset, setPreset] = useState("15m")
+
+  function handlePresetChange(value: string) {
+    setPreset(value)
+
+    if (value === "custom") return
+
+    const now = new Date()
+    let past = new Date()
+
+    switch (value) {
+      case "5m":
+        past = new Date(now.getTime() - 5 * 60 * 1000)
+        break
+      case "15m":
+        past = new Date(now.getTime() - 15 * 60 * 1000)
+        break
+      case "1h":
+        past = new Date(now.getTime() - 60 * 60 * 1000)
+        break
+      case "24h":
+        past = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+        break
+      case "7d":
+        past = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+        break
+    }
+
+    onRangeChange(past.toISOString(), now.toISOString())
+  }
+
+  return (
+    <div className="logsToolbar cardPanel">
+
+      <div className="leftFilters">
+
+        <select
+          value={preset}
+          onChange={(e) => handlePresetChange(e.target.value)}
+        >
+          <option value="5m">Last 5 min</option>
+          <option value="15m">Last 15 min</option>
+          <option value="1h">Last 1 hour</option>
+          <option value="24h">Last 24 hours</option>
+          <option value="7d">Last 7 days</option>
+          <option value="custom">Custom</option>
+        </select>
+
+        <TimeRangePicker
+          onApply={onRangeChange}
+          disabled={preset !== "custom"}
+        />
+
+        <select value={level} onChange={(e) => onLevelChange(e.target.value)}>
+          <option value="">All</option>
+          <option value="info">Info</option>
+          <option value="warn">Warn</option>
+          <option value="error">Error</option>
+          <option value="critical">Critical</option>
+        </select>
+
+        <select onChange={(e) => onSourceChange(e.target.value)}>
+          <option value="">All Sources</option>
+          <option value="host">Hosts</option>
+          <option value="container">Containers</option>
+        </select>
+
+      </div>
+
+      <div className="rightActions">
+        <input
+          placeholder="Search logs..."
+          onChange={(e) => onSearchChange(e.target.value)}
+        />
+        <button className="btn secondary">Live</button>
+      </div>
+
+    </div>
+  )
+}
+
+===== FILE: ./src/features/ai/AIPage.tsx =====
+export default function AIPage() {
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>AI Insights</h2>
+      <p>Coming soon...</p>
+    </div>
+  )
+}
+===== FILE: ./src/features/hosts/HostDetails.tsx =====
+import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
+
+import {
+  fetchLogs,
+  fetchHostSummary,
+  fetchHosts,
+  fetchContainerMetrics,
+} from "./api"
+
+interface Props {
+  agentId: string
+}
+
+type Tags = Record<string, string>
+
+interface HostSummary {
+  cpu_percent?: number
+  mem_used_mb?: number
+  mem_total_mb?: number
+  disk_used_mb?: number
+  network_in_mb?: number
+  network_out_mb?: number
+  uptime_sec?: number
+  tags?: Tags
+}
+
+interface LogEntry {
+  timestamp?: number
+  level?: string
+  message?: string
+  source_name?: string
+  source_type?: string
+}
+
+interface ContainerMetric {
+  name: string
+  status: string
+}
+
+export default function HostDetails({ agentId }: Props) {
+  const navigate = useNavigate()
+
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [summary, setSummary] = useState<HostSummary | null>(null)
+  const [containers, setContainers] = useState<ContainerMetric[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [selectedSource, setSelectedSource] = useState("all")
+  const [selectedType, setSelectedType] = useState("all")
+
+  useEffect(() => {
+    loadAll()
+
+    const interval = setInterval(() => {
+      loadAll()
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [agentId])
+
+  async function loadAll() {
+    setLoading(true)
+
+    try {
+      const [summaryData, logData, containerData, hostsData] =
+        await Promise.all([
+          fetchHostSummary(agentId),
+          fetchLogs(agentId),
+          fetchContainerMetrics(agentId).catch(() => []),
+          fetchHosts(), // 👈 reuse this
+        ])
+
+      const currentHost = hostsData.find(
+        (h: any) => h.agent_id === agentId
+      )
+
+      if (summaryData) {
+        summaryData.tags = currentHost?.tags ?? null
+      }
+
+      setSummary(summaryData ?? null)
+      setLogs(Array.isArray(logData) ? logData : [])
+      setContainers(Array.isArray(containerData) ? containerData : [])
+
+    } catch (err) {
+      console.error("Unexpected error:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function formatUptime(seconds?: number) {
+    if (!seconds) return "—"
+
+    const hours = Math.floor(seconds / 3600)
+    const days = Math.floor(hours / 24)
+
+    if (days > 0) return `${days}d ${hours % 24}h`
+    return `${hours}h`
+  }
+
+  // ✅ Extract unique sources/types dynamically
+  const sources = [
+    "all",
+    ...Array.from(new Set(logs.map(l => l.source_name).filter(Boolean)))
+  ]
+
+  const types = [
+    "all",
+    ...Array.from(new Set(logs.map(l => l.source_type).filter(Boolean)))
+  ]
+  // ✅ Filter logic (does NOT modify original logs)
+  const filteredLogs = logs.filter(l => {
+    const sourceMatch =
+      selectedSource === "all" || l.source_name === selectedSource
+
+    const typeMatch =
+      selectedType === "all" || l.source_type === selectedType
+
+    return sourceMatch && typeMatch
+  })
+
+  return (
+    <div style={{ padding: "20px" }}>
+      <button onClick={() => navigate(-1)}>⬅ Back</button>
+
+      <h2 style={{ marginTop: "10px" }}>Host Details</h2>
+
+      {loading && <p>Loading data...</p>}
+
+      {/* ================= METRICS ================= */}
+      <div
+        style={{
+          background: "#111827",
+          padding: "20px",
+          borderRadius: "12px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3>Key Metrics (1h)</h3>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "30px",
+            flexWrap: "wrap",
+            marginTop: "10px",
+          }}
+        >
+          <div>
+            <strong>CPU:</strong>{" "}
+            {summary?.cpu_percent !== undefined
+              ? summary.cpu_percent.toFixed(2)
+              : "—"}{" "}
+            %
           </div>
-        ) : (
+
+          <div>
+            <strong>RAM:</strong>{" "}
+            {summary?.mem_used_mb ?? "—"} /{" "}
+            {summary?.mem_total_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Disk Used:</strong>{" "}
+            {summary?.disk_used_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Network In:</strong>{" "}
+            {summary?.network_in_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Network Out:</strong>{" "}
+            {summary?.network_out_mb ?? "—"} MB
+          </div>
+
+          <div>
+            <strong>Uptime:</strong>{" "}
+            {formatUptime(summary?.uptime_sec)}
+          </div>
+        </div>
+        {/* ================= TAGS ================= */}
+        <div style={{ marginTop: "20px", fontSize: "14px" }}>
+          <strong>Tags:</strong>{" "}
+          {summary?.tags && Object.keys(summary.tags).length > 0 ? (
+            Object.entries(summary.tags).map(([key, value], index, arr) => (
+              <span key={key}>
+                <span style={{ opacity: 0.7 }}>{key}:</span> {value}
+                {index < arr.length - 1 && ", "}
+              </span>
+            ))
+          ) : (
+            <span style={{ opacity: 0.6 }}>No tags</span>
+          )}
+        </div>        
+      </div>
+
+      {/* ================= LOGS ================= */}
+      <div
+        style={{
+          background: "#0f172a",
+          padding: "15px",
+          borderRadius: "12px",
+          marginBottom: "20px",
+        }}
+      >
+        <h3>Logs</h3>
+
+        {logs.length === 0 && <p>No logs available</p>}
+        {/* 🔽 Filters */}
+        <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
           <select
-            className="tenantSelect"
-            value={user?.currentTenantId}
-            onChange={(e) => updateTenant(e.target.value)}
+            value={selectedSource}
+            onChange={(e) => setSelectedSource(e.target.value)}
+            style={{
+              padding: "6px",
+              borderRadius: "6px",
+              background: "#1e293b",
+              color: "white",
+              border: "1px solid #334155",
+            }}
           >
-            {tenants.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
+            {sources.map((src) => (
+              <option key={src} value={src}>
+                Source: {src}
               </option>
             ))}
           </select>
-        )}
+
+          <select
+            value={selectedType}
+            onChange={(e) => setSelectedType(e.target.value)}
+            style={{
+              padding: "6px",
+              borderRadius: "6px",
+              background: "#1e293b",
+              color: "white",
+              border: "1px solid #334155",
+            }}
+          >
+            {types.map((t) => (
+              <option key={t} value={t}>
+                Type: {t}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {filteredLogs.length === 0 && <p>No logs available</p>}
+
+        <div
+          style={{
+            maxHeight: "300px",
+            overflowY: "auto",
+            fontFamily: "monospace",
+            fontSize: "13px",
+            marginTop: "10px",
+          }}
+        >
+          {filteredLogs.map((l, i) => (
+            <div key={i} style={{ marginBottom: "4px" }}>
+              {l.timestamp
+                ? new Date(l.timestamp * 1000).toLocaleString()
+                : "—"}{" "}
+              [{l.level ?? "info"}]
+              {l.source_name && ` (${l.source_name})`}
+              {l.source_type && ` [${l.source_type}]`}{" "}
+              {l.message ?? ""}
+            </div>
+          ))}
+        </div>
       </div>
 
-    </aside>
+      {/* ================= CONTAINERS ================= */}
+      <div
+        style={{
+          background: "#0f172a",
+          padding: "15px",
+          borderRadius: "12px",
+        }}
+      >
+        <h3>Containers</h3>
+
+        {containers.length === 0 && <p>No containers detected</p>}
+
+        {containers.map((c, i) => (
+          <div key={i} style={{ marginBottom: "6px" }}>
+            {c.name} — {c.status}
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
-===== FILE: ./src/components/Tabs.tsx =====
+===== FILE: ./src/features/hosts/Hosts.tsx =====
+import { useEffect, useState, useMemo } from "react"
+import { useNavigate } from "react-router-dom"
+import HostTable from "./components/HostTable"
+import { fetchHosts } from "./api"
 
-===== FILE: ./src/components/MiniChart.tsx =====
+type Host = {
+  agent_id: string
+  alive: boolean
+  hostname: string
+  public_ip: string
+  ip: string
+  os?: string
+  first_seen?: string
+  last_seen?: string
+  tags?: Record<string, string>
+  cpu_percent?: number
+  mem_used_mb?: number
+  mem_total_mb?: number
+}
 
-===== FILE: ./src/components/ContainerTable.tsx =====
+export default function Hosts() {
+  const navigate = useNavigate()
 
-===== FILE: ./src/components/HostTable.tsx =====
+  const [hosts, setHosts] = useState<Host[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [query, setQuery] = useState("")
+  const [statusFilter, setStatusFilter] =
+    useState<"all" | "active" | "down">("all")
+
+  useEffect(() => {
+    load()
+    const interval = setInterval(load, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
+  async function load() {
+    try {
+      const data = await fetchHosts()
+      setHosts(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error("Failed to load hosts:", err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredHosts = useMemo(() => {
+    let result = [...hosts]
+
+    if (query) {
+      const q = query.toLowerCase()
+      result = result.filter(
+        (h) =>
+          h.hostname.toLowerCase().includes(q) ||
+          h.ip.toLowerCase().includes(q)
+      )
+    }
+
+    if (statusFilter !== "all") {
+      result = result.filter((h) =>
+        statusFilter === "active" ? h.alive : !h.alive
+      )
+    }
+
+    return result
+  }, [hosts, query, statusFilter])
+
+  return (
+    <div className="pageContainer">
+      <div className="pageHeader">
+        <div>
+          <h2>Hosts</h2>
+          <p className="pageSubtitle">
+            Manage infrastructure nodes
+          </p>
+        </div>
+
+        <div className="pageSearch">
+          <input
+            placeholder="Search hostname or IP..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div className="filterChips">
+        {["all", "active", "down"].map((status) => (
+          <button
+            key={status}
+            className={`chip ${
+              statusFilter === status ? "activeChip" : ""
+            }`}
+            onClick={() =>
+              setStatusFilter(status as any)
+            }
+          >
+            {status.toUpperCase()}
+          </button>
+        ))}
+      </div>
+
+      {loading && <p>Loading...</p>}
+
+      <div className="tableWrap">
+        <HostTable
+          hosts={filteredHosts}
+          onSelect={(id) => navigate(`/hosts/${id}`)}
+        />
+      </div>
+    </div>
+  )
+}
+===== FILE: ./src/features/hosts/HostDetails.Wrapper.tsx =====
+import { useParams } from "react-router-dom"
+import HostDetails from "./HostDetails"
+
+export default function HostDetailsWrapper() {
+  const { agentId } = useParams()
+
+  if (!agentId) return null
+
+  return <HostDetails agentId={agentId} />
+}
+===== FILE: ./src/features/hosts/utils/health.ts =====
+export type AgentHealth = {
+  label: string
+  className: string
+  reason: string
+}
+
+export function getAgentHealth(h: any): AgentHealth {
+  if (!h.alive) {
+    return {
+      label: "Down",
+      className: "critical",
+      reason: "Agent not reachable",
+    }
+  }
+
+  if (
+    h.cpu_percent !== undefined &&
+    h.mem_used_mb !== undefined &&
+    h.mem_total_mb !== undefined
+  ) {
+    const memPercent =
+      (h.mem_used_mb / h.mem_total_mb) * 100
+
+    if (h.cpu_percent > 85 || memPercent > 90) {
+      return {
+        label: "Critical",
+        className: "critical",
+        reason: "High CPU or Memory",
+      }
+    }
+
+    if (h.cpu_percent > 70 || memPercent > 80) {
+      return {
+        label: "Degraded",
+        className: "warning",
+        reason: "Elevated resource usage",
+      }
+    }
+
+    return {
+      label: "Healthy",
+      className: "healthy",
+      reason: "Operating normally",
+    }
+  }
+
+  return {
+    label: "Unknown",
+    className: "unknown",
+    reason: "No metrics available",
+  }
+}
+===== FILE: ./src/features/hosts/api.ts =====
+import { apiGet, apiPost } from "../../shared/lib/api/client"
+
+export async function fetchHosts() {
+  return apiGet("/api/hosts")
+}
+
+export async function fetchHostSummary(agentId: string) {
+  return apiPost("/api/hosts/summary", {
+    agent_id: agentId,
+  })
+}
+
+export async function fetchLogs(agentId: string) {
+  return apiGet(`/api/logs/fetch?agent_id=${agentId}`)
+}
+
+export async function fetchContainerMetrics(agentId: string) {
+  return apiPost("/api/container/metrics", {
+    agent_id: agentId,
+  })
+}
+===== FILE: ./src/features/hosts/components/ContainerTable.tsx =====
+
+===== FILE: ./src/features/hosts/components/HostTable.tsx =====
+import { getAgentHealth } from "../utils/health"
+
 interface Props {
   hosts: any[] | null | undefined
   onSelect: (id: string) => void
@@ -415,71 +1734,109 @@ export default function HostTable({ hosts, onSelect }: Props) {
   }
 
   return (
-    <table>
+    <table className="hostTable">
       <thead>
         <tr>
           <th>Host</th>
           <th>Status</th>
+          <th>Agent</th>
           <th>Last Seen</th>
           <th>IP</th>
           <th>OS</th>
         </tr>
       </thead>
+
       <tbody>
-        {hosts.map((h) => (
-          <tr key={h.agent_id} onClick={() => onSelect(h.agent_id)}>
-            <td>{h.hostname}</td>
-            <td className={h.alive ? "alive" : "dead"}>
-              {h.alive ? "Alive" : "Down"}
-            </td>
-            <td>{h.last_seen ? new Date(h.last_seen).toLocaleString() : "—"}</td>
-            <td>{h.ip || "—"}</td>
-            <td>{h.os || "—"}</td>
-          </tr>
-        ))}
+        {hosts.map((h) => {
+          const health = getAgentHealth(h)
+
+          const memPercent =
+            h.mem_used_mb && h.mem_total_mb
+              ? ((h.mem_used_mb / h.mem_total_mb) * 100).toFixed(0)
+              : null
+
+          return (
+            <tr
+              key={h.agent_id}
+              className="hostRow"
+              onClick={() => onSelect(h.agent_id)}
+            >
+              {/* Host */}
+              <td>
+                <div className="hostCell">
+                  <div className="hostName">{h.hostname}</div>
+                  <div className="hostSub">{h.ip}</div>
+                </div>
+              </td>
+
+              {/* Host Status */}
+              <td>
+                <span className="status">
+                  <span
+                    className={`dot ${h.alive ? "good" : "bad"}`}
+                  ></span>
+                  {h.alive ? "Online" : "Offline"}
+                </span>
+              </td>
+
+              {/* Agent Health */}
+              <td>
+                <div className="healthWrapper">
+                  <span className={`healthBadge ${health.className}`}>
+                    {health.label}
+                  </span>
+
+                  <div className="healthTooltip">
+                    <div className="tooltipTitle">
+                      {health.label}
+                    </div>
+
+                    {h.cpu_percent !== undefined && (
+                      <div className="tooltipRow">
+                        CPU: {h.cpu_percent.toFixed(0)}%
+                      </div>
+                    )}
+
+                    {memPercent && (
+                      <div className="tooltipRow">
+                        Memory: {memPercent}%
+                      </div>
+                    )}
+
+                    <div className="tooltipReason">
+                      {health.reason}
+                    </div>
+                  </div>
+                </div>
+              </td>
+
+              {/* Last Seen */}
+              <td>
+                {h.last_seen
+                  ? new Date(h.last_seen).toLocaleString()
+                  : "—"}
+              </td>
+
+              {/* IP */}
+              <td>{h.public_ip || "—"}</td>
+
+              {/* OS */}
+              <td>{h.os || "—"}</td>
+            </tr>
+          )
+        })}
       </tbody>
     </table>
   )
 }
-
-===== FILE: ./src/components/LogViewer.tsx =====
-interface Props {
-  logs: any[] | null | undefined
-}
-
-export default function LogViewer({ logs }: Props) {
-  if (!Array.isArray(logs) || logs.length === 0) {
-    return (
-      <div className="log-box">
-        No logs available
-      </div>
-    )
-  }
-
-  return (
-    <div className="log-box">
-      {logs.map((l, i) => (
-        <div key={i}>
-          {l.timestamp
-            ? new Date(l.timestamp * 1000).toLocaleString()
-            : "—"}{" "}
-          [{l.level || "info"}] {l.message || ""}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-===== FILE: ./src/components/KPIGrid.tsx =====
-
-===== FILE: ./src/components/Drawer.tsx =====
+===== FILE: ./src/features/hosts/components/Drawer.tsx =====
 import { useEffect, useState, useMemo } from "react"
 
 import {
   fetchLogs,
   fetchHostSummary,
   fetchContainerMetrics,
-} from "../api/client"
+} from "../api"
 
 import {
   LineChart,
@@ -766,11 +2123,53 @@ function Sparkline({ data }: { data: number[] }) {
 }
 
 
-===== FILE: ./src/components/AIBox.tsx =====
+===== FILE: ./src/features/hosts/components/HostCard.tsx =====
 
-===== FILE: ./src/components/HostCard.tsx =====
+===== FILE: ./src/features/fleet/FleetPage.tsx =====
+import StatCard from "../../shared/components/ui/StatCard"
 
-===== FILE: ./src/components/ErrorBoundary.tsx =====
+export default function FleetOverview() {
+  return (
+    <div>
+      <h2>Fleet Overview</h2>
+      <p className="subtitle">
+        Real-time infrastructure health summary
+      </p>
+
+      <div className="grid">
+        <StatCard label="Total Hosts" value={12} />
+        <StatCard label="Alive" value={10} />
+        <StatCard label="Dead" value={2} />
+        <StatCard label="Fleet Health" value="83%" />
+      </div>
+    </div>
+  )
+}
+===== FILE: ./src/shared/config/env.ts =====
+export const ENV = {
+  USE_MOCKS: import.meta.env.VITE_USE_MOCKS === "true",
+}
+===== FILE: ./src/shared/components/ui/StatCard.tsx =====
+import "./statcard.css"
+
+interface Props {
+  label: string
+  value: string | number
+}
+
+export default function StatCard({ label, value }: Props) {
+  return (
+    <div className="statCard">
+      <div className="statLabel">{label}</div>
+      <div className="statValue">{value}</div>
+    </div>
+  )
+}
+===== FILE: ./src/shared/components/AIBox.tsx =====
+
+===== FILE: ./src/shared/components/common/Tabs.tsx =====
+
+===== FILE: ./src/shared/components/common/ErrorBoundary.tsx =====
 import React from "react"
 
 interface State {
@@ -814,19 +2213,94 @@ export default class ErrorBoundary extends React.Component<
   }
 }
 
-===== FILE: ./src/hooks/useLogs.ts =====
+===== FILE: ./src/shared/lib/api/mock.ts =====
+function base64UrlEncode(obj: any) {
+  return btoa(JSON.stringify(obj))
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+}
 
-===== FILE: ./src/hooks/useContainers.ts =====
+export async function mockGet(url: string) {
+  if (url.includes("/api/hosts")) {
+    return [
+      {
+        agent_id: "1",
+        hostname: "opslens-agent",
+        alive: true,
+        ip: "172.18.0.7",
+        public_ip: "1.1.1.1",
+        os: "linux",
+        first_seen: new Date().toISOString(),
+        last_seen: new Date().toISOString(),
+      },
+    ]
+  }
 
-===== FILE: ./src/hooks/useHosts.ts =====
+  if (url.includes("/api/logs")) {
+    return [
+      {
+        ts: Math.floor(Date.now() / 1000),
+        level: "ERROR",
+        message: "Mock log error",
+        source_name: "container-1",
+      },
+    ]
+  }
+  if (url.includes("/api/login")) {
+    return {
+        token:
+        "mock.token.value." +
+        btoa(
+            JSON.stringify({
+            sub: "1",
+            username: "demo",
+            email: "demo@opslens.io",
+            is_super_admin: true,
+            tenants: [
+                { id: "t1", name: "Demo Tenant", slug: "demo" },
+            ],
+            currentTenantId: "t1",
+            })
+        ),
+    }
+    }
 
-===== FILE: ./src/api/client.ts =====
-// -------------------------------
-// API CLIENT (Production Safe)
-// -------------------------------
+  return []
+}
 
-import { data } from "react-router-dom"
-import { User } from "../auth/AuthContext"
+
+
+export async function mockPost(url: string, body: any) {
+  if (url.includes("/api/login")) {
+    const header = { alg: "HS256", typ: "JWT" }
+
+    const payload = {
+      sub: "1",
+      username: "demo",
+      email: "demo@opslens.io",
+      is_super_admin: true,
+      tenants: [
+        { id: "t1", name: "Demo Tenant", slug: "demo" },
+      ],
+      currentTenantId: "t1",
+    }
+
+    const token =
+      base64UrlEncode(header) +
+      "." +
+      base64UrlEncode(payload) +
+      ".mocksignature"
+
+    return { token }
+  }
+
+  return []
+}
+===== FILE: ./src/shared/lib/api/client.ts =====
+import { User } from "../../../features/auth/AuthContext"
+import { mockGet, mockPost } from "./mock"
+import { ENV } from "../../config/env"
 
 function safeParse<T>(value: string | null): T | null {
   if (!value || value === "undefined" || value === "null") {
@@ -840,964 +2314,46 @@ function safeParse<T>(value: string | null): T | null {
   }
 }
 
-function getHeaders(): HeadersInit {
-  const token = 
-    sessionStorage.getItem("token") || localStorage.getItem("token")
+export function getHeaders(): HeadersInit {
+  const token = sessionStorage.getItem("token")
 
-    const user = safeParse<User>(
-      sessionStorage.getItem("user") || localStorage.getItem("user")
-    ) 
-
+  const user = safeParse<User>(
+    sessionStorage.getItem("user")
+  )
 
   if (!token) return {}
 
   return {
-    Authorization: token ? "Bearer " + token : "",
+    Authorization: "Bearer " + token,
     "X-Tenant-ID": user?.currentTenantId || "",
     "Content-Type": "application/json",
   }
 }
 
-async function safeFetch(url: string) {
-  try {
-    const res = await fetch(url, {
-      headers: getHeaders(),
-    })
-
-    if (!res.ok) {
-      console.warn(`API error: ${res.status} → ${url}`)
-      return null
-    }
-
-    const data = await res.json()
-    return data ?? null
-  } catch (err) {
-    console.error("Network/API failure:", err)
-    return null
-  }
-}
-
-// -------------------------------
-// Hosts
-// -------------------------------
-
-export async function fetchHosts(): Promise<any[]> {
-  const data = await safeFetch("/api/hosts")
-  return Array.isArray(data) ? data : []
-}
-
-// -------------------------------
-// Host Summary
-// -------------------------------
-
-export async function fetchHostSummary(agentId: string) {
-  try {
-    const res = await fetch("/api/hosts/summary", {
-      method: "POST",
-      headers: getHeaders(),
-      body: JSON.stringify({
-        agent_id: agentId,
-      }),
-    })
-
-    if (!res.ok) {
-      console.warn(`API error: ${res.status} → host summary`)
-      return null
-    }
-    const data = await res.json()
-
-    if (data && data[agentId]) {
-      return data[agentId]
-    }
-
-    return null
-  } catch (err) {
-    console.error("Host summary error:", err)
-    return null
-  }
-}
-
-// -------------------------------
-// Logs
-// -------------------------------
-
-export async function fetchLogs(agentId: string): Promise<any[]> {
-  const data = await safeFetch(
-    `/api/logs/fetch?agent_id=${agentId}`
-  )
-
-  if (Array.isArray(data)) return data
-  if (Array.isArray(data?.logs)) return data.logs
-
-  return []
-}
-
-// -------------------------------
-// Container Metrics (FIXED)
-// -------------------------------
-
-export async function fetchContainerMetrics(agentId: string): Promise<any[]> {
-  try {
-    const res = await fetch("/api/container/metrics", {
-      method: "POST",
-      headers: {
-        ...getHeaders(),
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        agent_id: agentId,
-      }),
-    })
-
-    if (!res.ok) {
-      console.warn(`API error: ${res.status} → container metrics`)
-      return []
-    }
-
-    const data = await res.json()
-    return Array.isArray(data) ? data : []
-  } catch (err) {
-    console.error("Container metrics error:", err)
-    return []
-  }
-}
-
-
-// -------------------------------
-// Container Logs (FIXED)
-// -------------------------------
-
-export async function fetchContainerLogs(agentId: string): Promise<any[]> {
-  const data = await safeFetch(
-    `/api/container/logs?agent_id=${agentId}`
-  )
-
-  return Array.isArray(data) ? data : []
-}
-
-===== FILE: ./src/pages/HostDetails.tsx =====
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
-
-import {
-  fetchLogs,
-  fetchHostSummary,
-  fetchHosts,
-  fetchContainerMetrics,
-} from "../api/client"
-
-interface Props {
-  agentId: string
-}
-
-type Tags = Record<string, string>
-
-interface HostSummary {
-  cpu_percent?: number
-  mem_used_mb?: number
-  mem_total_mb?: number
-  disk_used_mb?: number
-  network_in_mb?: number
-  network_out_mb?: number
-  uptime_sec?: number
-  tags?: Tags
-}
-
-interface LogEntry {
-  timestamp?: number
-  level?: string
-  message?: string
-}
-
-interface ContainerMetric {
-  name: string
-  status: string
-}
-
-export default function HostDetails({ agentId }: Props) {
-  const navigate = useNavigate()
-
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [summary, setSummary] = useState<HostSummary | null>(null)
-  const [containers, setContainers] = useState<ContainerMetric[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    loadAll()
-
-    const interval = setInterval(() => {
-      loadAll()
-    }, 5000)
-
-    return () => clearInterval(interval)
-  }, [agentId])
-
-  async function loadAll() {
-    setLoading(true)
-
-    try {
-      const [summaryData, logData, containerData, hostsData] =
-        await Promise.all([
-          fetchHostSummary(agentId),
-          fetchLogs(agentId),
-          fetchContainerMetrics(agentId).catch(() => []),
-          fetchHosts(), // 👈 reuse this
-        ])
-
-      const currentHost = hostsData.find(
-        (h: any) => h.agent_id === agentId
-      )
-
-      if (summaryData) {
-        summaryData.tags = currentHost?.tags ?? null
-      }
-
-      setSummary(summaryData ?? null)
-      setLogs(Array.isArray(logData) ? logData : [])
-      setContainers(Array.isArray(containerData) ? containerData : [])
-
-    } catch (err) {
-      console.error("Unexpected error:", err)
-    } finally {
-      setLoading(false)
-    }
+export async function apiGet(url: string) {
+  if (ENV.USE_MOCKS) {
+    return mockGet(url)
   }
 
-  function formatUptime(seconds?: number) {
-    if (!seconds) return "—"
+  const res = await fetch(url, {
+    headers: getHeaders(),
+  })
 
-    const hours = Math.floor(seconds / 3600)
-    const days = Math.floor(hours / 24)
+  if (!res.ok) throw new Error(`API error ${res.status}`)
+  return res.json()
+}
 
-    if (days > 0) return `${days}d ${hours % 24}h`
-    return `${hours}h`
+export async function apiPost(url: string, body: any) {
+  if (ENV.USE_MOCKS) {
+    return mockPost(url, body)
   }
 
-  return (
-    <div style={{ padding: "20px" }}>
-      <button onClick={() => navigate(-1)}>⬅ Back</button>
+  const res = await fetch(url, {
+    method: "POST",
+    headers: getHeaders(),
+    body: JSON.stringify(body),
+  })
 
-      <h2 style={{ marginTop: "10px" }}>Host Details</h2>
-
-      {loading && <p>Loading data...</p>}
-
-      {/* ================= METRICS ================= */}
-      <div
-        style={{
-          background: "#111827",
-          padding: "20px",
-          borderRadius: "12px",
-          marginBottom: "20px",
-        }}
-      >
-        <h3>Key Metrics (1h)</h3>
-
-        <div
-          style={{
-            display: "flex",
-            gap: "30px",
-            flexWrap: "wrap",
-            marginTop: "10px",
-          }}
-        >
-          <div>
-            <strong>CPU:</strong>{" "}
-            {summary?.cpu_percent !== undefined
-              ? summary.cpu_percent.toFixed(2)
-              : "—"}{" "}
-            %
-          </div>
-
-          <div>
-            <strong>RAM:</strong>{" "}
-            {summary?.mem_used_mb ?? "—"} /{" "}
-            {summary?.mem_total_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Disk Used:</strong>{" "}
-            {summary?.disk_used_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Network In:</strong>{" "}
-            {summary?.network_in_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Network Out:</strong>{" "}
-            {summary?.network_out_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Uptime:</strong>{" "}
-            {formatUptime(summary?.uptime_sec)}
-          </div>
-        </div>
-
-        {/* ================= TAGS ================= */}
-        <div style={{ marginTop: "20px" }}>
-          <strong>Tags:</strong>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-              gap: "8px",
-              marginTop: "10px",
-            }}
-          >
-            {summary?.tags && Object.keys(summary.tags).length > 0 ? (
-              Object.entries(summary.tags).map(([key, value]) => (
-                <div
-                  key={key}
-                  style={{
-                    padding: "8px 12px",
-                    background: "#1f2937",
-                    borderRadius: "8px",
-                    border: "1px solid #374151",
-                    fontSize: "13px",
-                  }}
-                >
-                  <strong style={{ opacity: 0.7 }}>{key}:</strong>{" "}
-                  {value}
-                </div>
-              ))
-            ) : (
-              <span style={{ opacity: 0.6 }}>No tags</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ================= LOGS ================= */}
-      <div
-        style={{
-          background: "#0f172a",
-          padding: "15px",
-          borderRadius: "12px",
-          marginBottom: "20px",
-        }}
-      >
-        <h3>Logs</h3>
-
-        {logs.length === 0 && <p>No logs available</p>}
-
-        <div
-          style={{
-            maxHeight: "300px",
-            overflowY: "auto",
-            fontFamily: "monospace",
-            fontSize: "13px",
-            marginTop: "10px",
-          }}
-        >
-          {logs.map((l, i) => (
-            <div key={i} style={{ marginBottom: "4px" }}>
-              {l.timestamp
-                ? new Date(l.timestamp * 1000).toLocaleString()
-                : "—"}{" "}
-              [{l.level ?? "info"}] {l.message ?? ""}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ================= CONTAINERS ================= */}
-      <div
-        style={{
-          background: "#0f172a",
-          padding: "15px",
-          borderRadius: "12px",
-        }}
-      >
-        <h3>Containers</h3>
-
-        {containers.length === 0 && <p>No containers detected</p>}
-
-        {containers.map((c, i) => (
-          <div key={i} style={{ marginBottom: "6px" }}>
-            {c.name} — {c.status}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
+  if (!res.ok) throw new Error(`API error ${res.status}`)
+  return res.json()
 }
-===== FILE: ./src/pages/Hosts.tsx =====
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
-import { fetchHosts } from "../api/client"
-
-type Host = {
-  agent_id: string
-  alive: boolean
-  hostname: string
-  ip: string
-  os?: string
-  last_seen?: string
-  tags?: Record<string, string>
-}
-
-export default function Hosts() {
-  const [hosts, setHosts] = useState<Host[]>([])
-  const [loading, setLoading] = useState(true)
-  const navigate = useNavigate()
-
-  useEffect(() => {
-    load()
-    const interval = setInterval(load, 5000)
-    return () => clearInterval(interval)
-  }, [])
-
-  async function load() {
-    const data = await fetchHosts()
-    setHosts(Array.isArray(data) ? data : [])
-    setLoading(false)
-  }
-
-  return (
-    <div style={{ padding: "20px" }}>
-      <h2>Hosts</h2>
-
-      {loading && <p>Loading...</p>}
-
-      <div className="tableWrap" style={{ marginTop: "20px" }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Host</th>
-              <th>OS</th>
-              <th>Tags</th>
-              <th>Last Seen</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {hosts.map((h) => {
-              const tagsArray = Object.entries(h.tags || {})
-
-              return (
-                <tr
-                  key={h.agent_id}
-                  className="row"
-                  onClick={() => navigate(`/hosts/${h.agent_id}`)}
-                  style={{ cursor: "pointer" }}
-                >
-                  {/* Status */}
-                  <td>
-                    <span className="status">
-                      <span
-                        className={`dot ${h.alive ? "good" : "bad"}`}
-                      ></span>
-                      {h.alive ? "Active" : "Dead"}
-                    </span>
-                  </td>
-
-                  {/* Hostname + IP */}
-                  <td>
-                    <b>{h.hostname}</b>
-                    <div style={{ fontSize: 12, opacity: 0.6 }}>
-                      {h.ip}
-                    </div>
-                  </td>
-
-                  {/* OS */}
-                  <td>{h.os || "—"}</td>
-
-                  {/* Tags */}
-                  <td style={{ position: "relative" }}>
-                    {tagsArray.length > 0 ? (
-                      <>
-                        {tagsArray.slice(0, 3).map(([key, value]) => (
-                          <span
-                            key={key}
-                            style={{
-                              marginRight: "6px",
-                              padding: "4px 8px",
-                              background: "#1f2937",
-                              borderRadius: "6px",
-                              fontSize: "12px",
-                            }}
-                          >
-                            {key}: {value}
-                          </span>
-                        ))}
-
-                        {tagsArray.length > 3 && (
-                          <span
-                            style={{
-                              marginRight: "6px",
-                              padding: "4px 8px",
-                              background: "#374151",
-                              borderRadius: "6px",
-                              fontSize: "12px",
-                              cursor: "pointer",
-                            }}
-                            className="more-tags"
-                            onClick={(e) => e.stopPropagation()} // prevent row click
-                          >
-                            +{tagsArray.length - 3} more
-
-                            <div className="tooltip">
-                              {tagsArray.slice(3).map(([key, value]) => (
-                                <div key={key} style={{ marginBottom: "4px" }}>
-                                  {key}: {value}
-                                </div>
-                              ))}
-                            </div>
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span style={{ opacity: 0.6 }}>No tags</span>
-                    )}
-                  </td>
-
-                  {/* Last Seen */}
-                  <td>
-                    {h.last_seen
-                      ? new Date(h.last_seen).toLocaleString()
-                      : "—"}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-===== FILE: ./src/pages/Login.tsx =====
-import { useState } from "react"
-import { useNavigate } from "react-router-dom"
-import { useAuth } from "../auth/AuthContext"
-
-function parseJwt(token: string) {
-  try {
-    const base64Url = token.split(".")[1]
-    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/")
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split("")
-        .map((c) =>
-          "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)
-        )
-        .join("")
-    )
-    return JSON.parse(jsonPayload)
-  } catch {
-    return null
-  }
-}
-
-export default function Login() {
-  const { login } = useAuth()
-  const navigate = useNavigate()
-
-  const [username, setUsername] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-
-    setLoading(true)
-    setError("")
-
-    try {
-      const res = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      })
-
-      if (!res.ok) {
-        throw new Error("Invalid credentials")
-      }
-
-      const data = await res.json()
-
-      if (!data.token) {
-        throw new Error("Token missing in response")
-      }
-
-      // 🔥 Decode token
-      const payload = parseJwt(data.token)
-      console.log("JWT PAYLOAD:", payload)
-
-      if (!payload) {
-        throw new Error("Invalid token payload")
-      }
-
-      login({
-        token: data.token,
-        user: {
-          id: payload.sub || "1",
-          username: payload.username || payload.sub || "admin",
-          email: payload.email || "",
-          is_super_admin: payload.is_super_admin || false,
-          tenants: payload.tenants || [],
-          currentTenantId:
-            payload.currentTenantId ||
-            payload.current_tenant_id ||
-            payload.tenants?.[0]?.id ||
-            null,
-        },
-      })
-
-      navigate("/fleet")
-    } catch (err: any) {
-      console.error("LOGIN ERROR:", err)
-      setError(err.message || "Login failed")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="login-page-wrapper">
-      <div className="login-container">
-        <h1>OpsLens</h1>
-        <p style={{ opacity: 0.7, marginBottom: "20px" }}>
-          Sign in to continue
-        </p>
-
-        <form onSubmit={handleSubmit}>
-          <input
-            type="text"
-            placeholder="Username"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
-
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-
-          <button type="submit" disabled={loading}>
-            {loading ? "Signing in..." : "Login"}
-          </button>
-        </form>
-
-        {error && (
-          <div style={{ marginTop: "14px", color: "#FF4D6D" }}>
-            {error}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-===== FILE: ./src/pages/FleetOverview.tsx =====
-import { useEffect, useState } from "react"
-import { fetchHosts } from "../api/client"
-
-export default function FleetOverview() {
-  const [hosts, setHosts] = useState<any[]>([])
-
-  useEffect(() => {
-    load()
-    const interval = setInterval(load, 5000)
-    return () => clearInterval(interval)
-  }, [])
-
-  async function load() {
-    const data = await fetchHosts()
-    setHosts(Array.isArray(data) ? data : [])
-  }
-
-  // ---------------- KPI Calculations ----------------
-  const safeHosts = Array.isArray(hosts) ? hosts : []
-
-  const total = safeHosts.length
-  const alive = safeHosts.filter(h => h?.alive).length
-  const dead = total - alive
-
-  const fleetHealth =
-    total > 0 ? Math.round((alive / total) * 100) : 0
-
-  const environments = [
-    ...new Set(hosts.map((h) => h.environment).filter(Boolean)),
-  ]
-
-  return (
-    <div style={{ padding: "20px" }}>
-      <h2>Fleet Overview</h2>
-      <p style={{ opacity: 0.6 }}>
-        Real-time infrastructure health summary
-      </p>
-
-      {/* ---------------- KPI GRID ---------------- */}
-      <div className="kpis" style={{ marginTop: "20px" }}>
-        <div className="kpi">
-          <div className="label">Total Hosts</div>
-          <div className="value">{total}</div>
-        </div>
-
-        <div className="kpi">
-          <div className="label">Alive</div>
-          <div className="value">{alive}</div>
-        </div>
-
-        <div className="kpi">
-          <div className="label">Dead</div>
-          <div className="value">{dead}</div>
-        </div>
-
-        <div className="kpi">
-          <div className="label">Fleet Health</div>
-          <div className="value">{fleetHealth}%</div>
-        </div>
-
-        <div className="kpi">
-          <div className="label">Environments</div>
-          <div className="value">{environments.length}</div>
-        </div>
-      </div>
-
-      {/* ---------------- RECENT HOSTS ---------------- */}
-      <div
-        className="card"
-        style={{ marginTop: "30px", padding: "20px" }}
-      >
-        <h3>Recently Seen Hosts</h3>
-
-        {hosts.length === 0 && (
-          <div style={{ opacity: 0.6, marginTop: "10px" }}>
-            No hosts connected
-          </div>
-        )}
-
-        {hosts.slice(0, 5).map((h) => (
-          <div
-            key={h.agent_id}
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              padding: "8px 0",
-              borderBottom: "1px solid #1f2937",
-            }}
-          >
-            <div>
-              <strong>{h.hostname}</strong>
-              <div style={{ fontSize: 12, opacity: 0.6 }}>
-                {h.ip}
-              </div>
-            </div>
-
-            <div
-              style={{
-                color: h.alive ? "#22c55e" : "#ef4444",
-                fontWeight: 600,
-              }}
-            >
-              {h.alive ? "Active" : "Down"}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/Alerts.tsx =====
-export default function Alerts() {
-  return (
-    <div style={{ padding: "20px" }}>
-      <h2>Alerts</h2>
-      <p>No alerts configured yet.</p>
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/logs/LogsExplorer.tsx =====
-import { useState } from "react"
-import LogsToolbar from "./components/LogsToolbar"
-import LogsTimeline from "./components/LogsTimeline"
-import LogsTable from "./components/LogsTable"
-import LogDetailsDrawer from "./components/LogDetailsDrawer"
-
-export default function LogsExplorer() {
-  const [selectedLog, setSelectedLog] = useState<any>(null)
-
-  return (
-    <div className="logsPage">
-      
-      <LogsToolbar />
-
-      <LogsTimeline />
-
-      <div className="logsContent">
-        <LogsTable onSelect={setSelectedLog} />
-        {selectedLog && (
-          <LogDetailsDrawer
-            log={selectedLog}
-            onClose={() => setSelectedLog(null)}
-          />
-        )}
-      </div>
-
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/logs/components/LogDetailsDrawer.tsx =====
-export default function LogDetailsDrawer({ log, onClose }: any) {
-  return (
-    <div className="logDrawer">
-      <div className="drawerHeader">
-        <h3>Log Details</h3>
-        <button onClick={onClose}>Close</button>
-      </div>
-
-      <pre>{JSON.stringify(log, null, 2)}</pre>
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/logs/components/LogsTable.tsx =====
-import LogRow from "./LogRow"
-
-interface LogsTableProps {
-  onSelect: (log: any) => void
-}
-
-export default function LogsTable({ onSelect }: LogsTableProps) {
-
-  const dummyLogs = [
-    {
-      ts: "12:03:22",
-      level: "ERROR",
-      source: "host-1",
-      message: "Disk quota exceeded"
-    },
-    {
-      ts: "12:05:10",
-      level: "WARN",
-      source: "container-api",
-      message: "High memory usage detected"
-    }
-  ]
-
-  return (
-    <div className="logsTable">
-      {dummyLogs.map((log, i) => (
-        <LogRow
-          key={i}
-          log={log}
-          onClick={() => onSelect(log)}
-        />
-      ))}
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/logs/components/LogsTimeline.tsx =====
-export default function LogsTimeline() {
-  return (
-    <div className="logsTimeline">
-      <h4>Log Volume</h4>
-      <div className="bars">
-        {/* Later render dynamic bars */}
-      </div>
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/logs/components/LogRow.tsx =====
-interface LogRowProps {
-  log: {
-    ts: string
-    level: string
-    source: string
-    message: string
-  }
-  onClick: () => void
-}
-
-export default function LogRow({ log, onClick }: LogRowProps) {
-  return (
-    <div
-      className={`logRow ${log.level.toLowerCase()}`}
-      onClick={onClick}
-    >
-      <span className="ts">{log.ts}</span>
-      <span className="level">{log.level}</span>
-      <span className="source">{log.source}</span>
-      <span className="msg">{log.message}</span>
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/logs/components/LogsToolbar.tsx =====
-export default function LogsToolbar() {
-  return (
-    <div className="logsToolbar">
-
-      <div className="leftFilters">
-        <select>
-          <option>Last 15 min</option>
-          <option>Last 1 hour</option>
-          <option>Last 24 hours</option>
-        </select>
-
-        <select>
-          <option>All Levels</option>
-          <option>INFO</option>
-          <option>WARN</option>
-          <option>ERROR</option>
-        </select>
-
-        <select>
-          <option>All Sources</option>
-          <option>Hosts</option>
-          <option>Containers</option>
-        </select>
-      </div>
-
-      <div className="rightActions">
-        <input placeholder="Search logs..." />
-        <button className="btn secondary">Live</button>
-      </div>
-
-    </div>
-  )
-}
-
-===== FILE: ./src/pages/Admin.tsx =====
-import { NavLink, Routes, Route } from "react-router-dom"
-
-
-export default function Admin() {
-  return (
-    <div style={{ padding: "20px" }}>
-      <h2>Admin Panel</h2>
-
-      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
-        <h3>Tenants</h3>
-        <p>Tenant management UI coming soon.</p>
-      </div>
-
-      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
-        <h3>Users</h3>
-        <p>User management UI coming soon.</p>
-      </div>
-
-      <div className="card" style={{ padding: "20px", marginTop: "20px" }}>
-        <h3>Roles</h3>
-        <p>Role management UI coming soon.</p>
-      </div>
-    </div>
-  )
-}
-
-

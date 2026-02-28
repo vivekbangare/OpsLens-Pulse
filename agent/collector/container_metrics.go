@@ -3,7 +3,6 @@ package collector
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,17 +11,17 @@ import (
 	"opslense-pulse/agent/containers"
 	"opslense-pulse/agent/retry"
 	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
 )
 
 var (
-	lastMetrics     = make(map[string]time.Time) // containerID -> last sent time
-	lastMetricsFile = filepath.Join(BaseDir, "container_metrics.json")
+	lastMetrics     = make(map[string]time.Time)
+	lastMetricsFile = filepath.Join(StateDir, "container_metrics.json")
 	lastMetricsLock = &sync.Mutex{}
 	metricsDirty    = false
 	flushInterval   = 30 * time.Second
 )
 
-// loadLastMetrics loads last sent timestamps from disk
 func loadLastMetrics() {
 	data, err := os.ReadFile(lastMetricsFile)
 	if err != nil {
@@ -33,7 +32,6 @@ func loadLastMetrics() {
 	_ = json.Unmarshal(data, &lastMetrics)
 }
 
-// saveLastMetrics persists timestamps to disk
 func saveLastMetrics() {
 	lastMetricsLock.Lock()
 	defer lastMetricsLock.Unlock()
@@ -44,26 +42,25 @@ func saveLastMetrics() {
 
 	data, err := json.Marshal(lastMetrics)
 	if err != nil {
-		log.Println("Error marshaling container metrics data:", err)
+		shared.Error("container metrics marshal failed", "error", err.Error())
 		return
 	}
 
 	tmp := lastMetricsFile + ".tmp"
 
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		log.Println("Error writing temp container metrics file:", err)
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		shared.Error("container metrics temp write failed", "error", err.Error())
 		return
 	}
 
 	if err := os.Rename(tmp, lastMetricsFile); err != nil {
-		log.Println("Error renaming container metrics file:", err)
+		shared.Error("container metrics rename failed", "error", err.Error())
 		return
 	}
 
 	metricsDirty = false
 }
 
-// periodicMetricsFlush runs background flush
 func periodicMetricsFlush(ctx context.Context) {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
@@ -71,7 +68,7 @@ func periodicMetricsFlush(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			saveLastMetrics() // final flush
+			saveLastMetrics()
 			return
 		case <-ticker.C:
 			saveLastMetrics()
@@ -79,15 +76,15 @@ func periodicMetricsFlush(ctx context.Context) {
 	}
 }
 
-// StartContainerMetricsCollector collects metrics from running Docker containers
 func StartContainerMetricsCollector(
 	ctx context.Context,
 	agentID, hostname, serverURL, apiKey string,
 	intervalSeconds int,
 ) {
-	loadLastMetrics()
 
-	// Start background flusher
+	shared.Info("container metrics collector started")
+
+	loadLastMetrics()
 	go periodicMetricsFlush(ctx)
 
 	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
@@ -95,20 +92,22 @@ func StartContainerMetricsCollector(
 
 	for {
 		select {
+
 		case <-ctx.Done():
-			log.Println("📦 Container metrics collector stopped")
-			saveLastMetrics() // final safety flush
+			saveLastMetrics()
+			shared.Info("container metrics collector stopped")
 			return
 
 		case <-ticker.C:
-			list, err := containers.ListRunning()
+
+			list, err := containers.ListRunning(ctx)
 			if err != nil {
-				log.Println("Error listing containers:", err)
 				continue
 			}
 
 			for _, c := range list {
-				raw, err := containers.GetContainerMetrics(c)
+
+				raw, err := containers.GetContainerMetrics(ctx, c)
 				if err != nil {
 					continue
 				}
@@ -121,20 +120,15 @@ func StartContainerMetricsCollector(
 					continue
 				}
 
-				metric := containers.ToSharedMetrics(
-					raw,
-					agentID,
-					hostname,
-				)
+				metric := containers.ToSharedMetrics(raw, agentID, hostname)
 
 				if err := retry.Do(3, 2*time.Second, func() error {
 					return sender.SendContainerMetrics(serverURL, apiKey, metric)
 				}); err != nil {
-					log.Println("Container metrics send failed:", err)
+					shared.Error("container metrics send failed", "error", err.Error())
 					continue
 				}
 
-				// Update in-memory only
 				lastMetricsLock.Lock()
 				lastMetrics[c.ID] = raw.Timestamp
 				metricsDirty = true

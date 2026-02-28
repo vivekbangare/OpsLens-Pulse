@@ -1,62 +1,127 @@
 package api
 
 import (
-	"encoding/json"
 	"net/http"
+
 	"opslense-pulse/server/middleware"
 	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
 	"opslense-pulse/shared"
 )
 
 func ContainerMetricsHandler(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 
-		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
 			return
 		}
 
 		var metrics shared.ContainerMetrics
-		if err := json.NewDecoder(r.Body).Decode(&metrics); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+		if err := utils.DecodeJSONStrict(r, &metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
 			return
 		}
 
-		// 🔒 enforce tenant from auth
+		if err := validation.ValidateContainerMetrics(&metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		// 🔒 Enforce tenant from auth
 		metrics.TenantID = tenantID
 
-		if metrics.TenantID == "" || metrics.ContainerID == "" {
-			http.Error(w, "missing tenant_id or container_id", http.StatusBadRequest)
+		if metrics.ContainerID == "" {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				"container_id is required",
+				reqID,
+			)
 			return
 		}
-		if err := store.SaveContainerMetrics(metrics); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		if err := store.SaveContainerMetrics(r.Context(), metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
 			return
 		}
+
 		w.WriteHeader(http.StatusOK)
 	}
 }
 
 func ContainerLogsHandler(store store.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
 		if !ok || tenantID == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
 			return
 		}
 
 		var batch shared.ContainerLogBatch
-		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+		if err := utils.DecodeJSONStrict(r, &batch); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
 			return
 		}
+
+		// 🔒 Enforce tenant from auth
 		batch.TenantID = tenantID
-		if err := store.InsertContainerLogs(batch); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		if err := store.InsertContainerLogs(r.Context(), batch); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
 			return
 		}
+
 		w.WriteHeader(http.StatusOK)
 	}
 }

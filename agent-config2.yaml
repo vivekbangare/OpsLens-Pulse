@@ -1,6 +1,6 @@
 server:
   url: http://server:9898
-  api_key: opl_ecdd8b56f395948b4682be3be39a59d817207bd93ccd67b434cef38793731ed9
+  api_key: opl_91ef2ed232ff991b734c3800701c7058147d62abd85fddc7f8dba30a7ee41073
 
 agent:
   interval_seconds: 5
@@ -20,7 +20,11 @@ agent:
         - "*.gz"
     - name: kernel_logs
       type: command
-      command: dmesg --ctime
+      command: |
+        echo "$(date '+%Y-%m-%d %H:%M:%S') INFO Command log test message AGENT2"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') WARN Command warning test AGENT2"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR Command error occurred AGENT2"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') CRITICAL System meltdown detected AGENT2"
   
 tags:
   env: test

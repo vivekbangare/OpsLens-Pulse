@@ -3,48 +3,79 @@ package db
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"time"
 
 	_ "github.com/lib/pq"
+
+	"opslense-pulse/server/config"
 )
 
-func NewPostgres() (*sql.DB, error) {
+func NewPostgres(cfg config.PostgresSection) (*sql.DB, error) {
 
-	host := os.Getenv("POSTGRES_HOST")
-	port := os.Getenv("POSTGRES_PORT")
-	user := os.Getenv("POSTGRES_USER")
-	password := os.Getenv("POSTGRES_PASSWORD")
-	dbname := os.Getenv("POSTGRES_DB")
-
-	if host == "" {
-		host = "localhost"
+	if cfg.Port == 0 {
+		cfg.Port = 5432
 	}
-	if port == "" {
-		port = "5432"
+
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = "disable"
 	}
 
 	dsn := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		host,
-		port,
-		user,
-		password,
-		dbname,
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host,
+		cfg.Port,
+		cfg.User,
+		cfg.Password,
+		cfg.Database,
+		cfg.SSLMode,
 	)
 
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, err
+	var dbConn *sql.DB
+	var err error
+
+	retries := cfg.ConnectRetries
+	if retries <= 0 {
+		retries = 3
 	}
 
-	db.SetMaxOpenConns(20)
-	db.SetMaxIdleConns(10)
-	db.SetConnMaxLifetime(30 * time.Minute)
-
-	if err := db.Ping(); err != nil {
-		return nil, err
+	retryDelay := time.Duration(cfg.RetryDelaySec) * time.Second
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
 	}
 
-	return db, nil
+	for i := 1; i <= retries; i++ {
+
+		dbConn, err = sql.Open("postgres", dsn)
+		if err != nil {
+			return nil, err
+		}
+
+		err = dbConn.Ping()
+		if err == nil {
+			break
+		}
+
+		if i == retries {
+			return nil, err
+		}
+
+		time.Sleep(retryDelay)
+	}
+
+	// ---------- Pool Settings ----------
+	if cfg.MaxOpenConns > 0 {
+		dbConn.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+
+	if cfg.MaxIdleConns > 0 {
+		dbConn.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+
+	if cfg.ConnMaxLifetimeMin > 0 {
+		dbConn.SetConnMaxLifetime(
+			time.Duration(cfg.ConnMaxLifetimeMin) * time.Minute,
+		)
+	}
+
+	return dbConn, nil
 }

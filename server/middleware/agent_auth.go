@@ -3,17 +3,21 @@ package middleware
 import (
 	"context"
 	"net/http"
-	"opslense-pulse/server/store"
 	"strings"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
 )
 
 func AgentAuth(validator store.APIKeyValidator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
+			reqID := GetRequestID(r.Context())
+
 			header := r.Header.Get("Authorization")
 			if !strings.HasPrefix(header, "Bearer ") {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing api key", reqID)
 				return
 			}
 
@@ -21,7 +25,7 @@ func AgentAuth(validator store.APIKeyValidator) func(http.Handler) http.Handler 
 
 			ok, tenantID, err := validator.ValidateAPIKey(rawKey)
 			if err != nil || !ok {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid api key", reqID)
 				return
 			}
 

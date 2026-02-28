@@ -4,12 +4,14 @@ import { Outlet } from "react-router-dom"
 
 export default function AppLayout() {
   return (
-    <div className="app">
+    <div className="layout">
       <Sidebar />
-      <main className="main">
+      <div className="contentArea">
         <Topbar />
-        <Outlet />
-      </main>
+        <div className="pageContainer">
+          <Outlet />
+        </div>
+      </div>
     </div>
   )
 }

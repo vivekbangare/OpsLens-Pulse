@@ -11,15 +11,43 @@ services:
       - ./logs:/logs  # host folder ./logs mounted to /logs in container
     command: >
       bash -c "while true; do
-        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random log message\" >> /logs/random.log;
-        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random String message\" >> /logs/random.log;
-        echo \"$(date '+%Y-%m-%d %H:%M:%S') Random Number message\" >> /logs/random.log;
-        echo \"$(date '+%Y-%m-%d %H:%M:%S') Error message\" >> /logs/random.log;
-        echo \"$(date '+%Y-%m-%d %H:%M:%S') Critical message\" >> /logs/random.log;
-        echo \"$(date '+%Y-%m-%d %H:%M:%S') ERROR $(head -c 1200 < /dev/urandom | base64 | tr -d '\n')\" >> /logs/random.log;
+        NOW=\$(date '+%Y-%m-%d %H:%M:%S')
 
-        sleep 1;
+        echo \"\$NOW INFO Random log message\" >> /logs/random.log
+        echo \"\$NOW INFO Random String message\" >> /logs/random.log
+        echo \"\$NOW INFO Random Number message\" >> /logs/random.log
+
+        echo \"\$NOW WARN Disk usage high on /dev/sda1\" >> /logs/random.log
+        echo \"\$NOW WARN Memory usage exceeded 75%\" >> /logs/random.log
+
+        echo \"\$NOW ERROR Database connection failed\" >> /logs/random.log
+        echo \"\$NOW ERROR Timeout while calling external API\" >> /logs/random.log
+
+        echo \"\$NOW CRITICAL Kernel panic - not syncing\" >> /logs/random.log
+
+        # Large random ERROR payload (to test UI rendering)
+        echo \"\$NOW ERROR \$(head -c 800 < /dev/urandom | base64 | tr -d '\n')\" >> /logs/random.log
+
+        # Simulated stack trace
+        echo \"\$NOW ERROR Exception in thread main\" >> /logs/random.log
+        echo \"\$NOW ERROR     at com.example.Service.process(Service.java:42)\" >> /logs/random.log
+        echo \"\$NOW ERROR     at com.example.App.main(App.java:10)\" >> /logs/random.log
+        echo \"\$NOW {\"level\":\"ERROR\",\"service\":\"auth\",\"message\":\"JWT expired\"}\" >> /logs/random.log
+        echo \"\$NOW {\"level\":\"ERROR\",\"service\":\"auth\",\"message\":\"JWT expired today tommorw\"}\" >> /logs/random.log
+        echo \"\$NOW {\"level\":\"ERROR\",\"service\":\"auth\",\"message\":\"JWT expired now now \"}\" >> /logs/random.log
+        echo \"\$NOW {\"level\":\"WARN\",\"service\":\"auth\",\"message\":\"JWT expired\"}\" >> /logs/random.log
+        echo \"\$NOW {\"level\":\"INFO\",\"service\":\"auth\",\"message\":\"JWT expired\"}\" >> /logs/random.log
+
+        # Random burst mode (simulate anomaly spike)
+        if [ \$((RANDOM % 5)) -eq 0 ]; then
+          for i in {1..20}; do
+            echo \"\$NOW ERROR Burst error spike detected\" >> /logs/random.log
+          done
+        fi
+
+        sleep 1
       done"
+
   agent:
     image: golang:1.25.6
     container_name: opslens-agent

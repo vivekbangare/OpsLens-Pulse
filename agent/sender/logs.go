@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
+	"opslense-pulse/agent/metrics"
+	"opslense-pulse/shared"
 )
 
 // LogEntry represents a log entry
@@ -25,36 +26,38 @@ type LogBatch struct {
 }
 
 func SendLogs(serverURL, apiKey string, payload LogBatch) error {
-	log.Printf(
-		"🚨 SEND LOGS CALLED: agent=%s host=%s count=%d server=%s",
-		payload.AgentID,
-		payload.Hostname,
-		len(payload.Logs),
-		serverURL,
+	shared.Info(
+		"send logs called",
+		"agent", payload.AgentID,
+		"host", payload.Hostname,
+		"count", len(payload.Logs),
 	)
 	body, error := json.Marshal(payload)
 
 	if error != nil {
 		return error
 	}
-	//log.Printf("📦 LOG PAYLOAD: %s", string(body))
 	req, err := http.NewRequest("POST", serverURL+"/api/logs", bytes.NewBuffer(body))
 	if err != nil {
+		metrics.IncLogFailure()
 		return err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Agent-Version", agentVersion)
 
 	resp, err := httpClient.Do(req)
-	fmt.Println("📤 POST /api/logs →", serverURL)
-	fmt.Printf("📦 Payload size: %d logs\n", len(payload.Logs))
+	// fmt.Println("📤 POST /api/logs →", serverURL)
+	// fmt.Printf("📦 Payload size: %d logs\n", len(payload.Logs))
 	if err != nil {
+		metrics.IncLogFailure()
 		return err
 	}
 	defer resp.Body.Close()
-	fmt.Println("📥 Response status:", resp.StatusCode)
+	//fmt.Println("📥 Response status:", resp.StatusCode)
 	if resp.StatusCode != http.StatusOK {
+		metrics.IncLogFailure()
 		return fmt.Errorf("server returned status: %d", resp.StatusCode)
 	}
 

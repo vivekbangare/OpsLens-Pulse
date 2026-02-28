@@ -1,7 +1,8 @@
-// agent/metrics/cpu.go
 package metrics
 
-import "github.com/shirou/gopsutil/v3/cpu"
+import (
+	"github.com/shirou/gopsutil/v3/cpu"
+)
 
 func CPUPercent() float64 {
 	p, err := cpu.Percent(0, false)

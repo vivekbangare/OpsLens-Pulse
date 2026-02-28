@@ -25,7 +25,6 @@ type RawContainerMetrics struct {
 
 var dockerClient *client.Client
 
-// Initialize reusable Docker client
 func init() {
 	var err error
 
@@ -35,33 +34,24 @@ func init() {
 	)
 
 	if err != nil {
-		// Do NOT panic — allow agent to run without docker
 		dockerClient = nil
 	}
 }
 
-// ListRunning returns running containers
-func ListRunning() ([]types.Container, error) {
+func ListRunning(ctx context.Context) ([]types.Container, error) {
 	if dockerClient == nil {
 		return nil, fmt.Errorf("docker client not initialized")
 	}
 
-	return dockerClient.ContainerList(
-		context.Background(),
-		types.ContainerListOptions{},
-	)
+	return dockerClient.ContainerList(ctx, types.ContainerListOptions{})
 }
 
-// GetContainerMetrics returns CPU + Memory stats
-func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
+func GetContainerMetrics(ctx context.Context, c types.Container) (RawContainerMetrics, error) {
 	if dockerClient == nil {
 		return RawContainerMetrics{}, fmt.Errorf("docker client not initialized")
 	}
 
-	stats, err := dockerClient.ContainerStatsOneShot(
-		context.Background(),
-		c.ID,
-	)
+	stats, err := dockerClient.ContainerStatsOneShot(ctx, c.ID)
 	if err != nil {
 		return RawContainerMetrics{}, err
 	}
@@ -105,8 +95,7 @@ func GetContainerMetrics(c types.Container) (RawContainerMetrics, error) {
 	}, nil
 }
 
-// GetContainerLogs fetches recent container logs
-func GetContainerLogs(containerID string, tail int) ([]string, error) {
+func GetContainerLogsSince(ctx context.Context, containerID string, since int64) ([]string, error) {
 	if dockerClient == nil {
 		return nil, fmt.Errorf("docker client not initialized")
 	}
@@ -115,21 +104,19 @@ func GetContainerLogs(containerID string, tail int) ([]string, error) {
 		ShowStdout: true,
 		ShowStderr: true,
 		Timestamps: true,
-		Tail:       fmt.Sprintf("%d", tail),
+		Since:      fmt.Sprintf("%d", since),
 	}
 
-	reader, err := dockerClient.ContainerLogs(
-		context.Background(),
-		containerID,
-		options,
-	)
+	reader, err := dockerClient.ContainerLogs(ctx, containerID, options)
 	if err != nil {
 		return nil, err
 	}
 	defer reader.Close()
 
-	data, err := io.ReadAll(reader)
-	if err != nil {
+	limited := io.LimitReader(reader, 5*1024*1024)
+	data, err := io.ReadAll(limited)
+
+	if err != nil || len(data) == 0 {
 		return nil, err
 	}
 

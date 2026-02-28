@@ -1,2 +1,46 @@
-listen_port: 9898
+server:
+  listen_port: 9898
+  rate_limit:
+    requests: 200
+    window_sec: 60
+  environment: production
 
+  read_timeout_sec: 10
+  write_timeout_sec: 10
+  idle_timeout_sec: 60
+  max_header_bytes: 1048576
+
+clickhouse:
+  host: clickhouse
+  port: 9000
+  user: default
+  database: opslens
+
+  max_open_conns: 50
+  max_idle_conns: 20
+  conn_max_lifetime_min: 30
+
+  connect_retries: 5
+  retry_delay_sec: 3
+
+postgres:
+  host: postgres
+  port: 5432
+  user: opslens
+  database: opslens
+
+  ssl_mode: disable
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_lifetime_min: 30
+
+  connect_retries: 5
+  retry_delay_sec: 3
+
+security:
+  max_body_mb: 10
+  jwt_issuer: "opslens-pulse"
+  jwt_audience: "opslens-ui"
+
+logging:
+  level: info

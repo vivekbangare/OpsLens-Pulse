@@ -3,21 +3,14 @@ package identity
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"opslense-pulse/agent/collector"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
-func agentIDPath() string {
-	if runtime.GOOS == "windows" {
-		return `C:\ProgramData\OpsLens-Pulse\agent-id`
-	}
-	return "/var/lib/opslens-pulse/agent-id"
-}
-
 func LoadOrCreateAgentID() (string, error) {
-	path := agentIDPath()
+	path := filepath.Join(collector.StateDir, "agent-id")
 
 	// Check if the file exists
 	if data, err := os.ReadFile(path); err == nil {
@@ -29,7 +22,7 @@ func LoadOrCreateAgentID() (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, []byte(id), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(id), 0600); err != nil {
 		return "", err
 	}
 	return id, nil
