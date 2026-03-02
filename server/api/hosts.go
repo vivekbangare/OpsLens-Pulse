@@ -44,14 +44,25 @@ func HostSummaryHandler(st store.Store) http.HandlerFunc {
 			return
 		}
 
+		agentID := r.URL.Query().Get("agent_id")
+		if agentID == "" {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "agent_id required", reqID)
+			return
+		}
+
 		data, err := st.GetLatestHostMetrics(r.Context(), tenantID)
 		if err != nil {
 			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(data)
+		metric, ok := data[agentID]
+		if !ok {
+			utils.WriteJSON(w, http.StatusOK, nil)
+			return
+		}
+
+		utils.WriteJSON(w, http.StatusOK, metric)
 	}
 }
 

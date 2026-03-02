@@ -131,8 +131,10 @@ func (c *ClickHouseStore) ListAgents(
 			a.tenant_id,
 			a.agent_id,
 			any(a.hostname) AS hostname,
-			any(a.ip) AS ip,
+			any(a.private_ip) AS private_ip,
 			any(a.public_ip) AS public_ip,
+			any(a.remote_ip) AS remote_ip,
+			any(a.k8s_node_ip) AS k8s_node_ip,
 			any(a.os) AS os,
 			any(a.version) AS version,
 			any(a.environment) AS environment,
@@ -161,8 +163,10 @@ func (c *ClickHouseStore) ListAgents(
 			&ai.TenantID,
 			&ai.AgentID,
 			&ai.Hostname,
-			&ai.IP,
+			&ai.PrivateIP,
 			&ai.PublicIP,
+			&ai.RemoteIP,
+			&ai.K8sNodeIP,
 			&ai.OS,
 			&ai.Version,
 			&ai.Environment,
@@ -295,6 +299,10 @@ func (c *ClickHouseStore) SearchLogs(
 	toTime, err := time.Parse(time.RFC3339, req.To)
 	if err != nil {
 		return nil, err
+	}
+
+	if req.Limit <= 0 || req.Limit > 1000 {
+		req.Limit = 500
 	}
 
 	query := `
@@ -459,4 +467,55 @@ func (c *ClickHouseStore) GetLogsTimeline(
 		Points:  points,
 		Anomaly: anomaly,
 	}, nil
+}
+
+func (c *ClickHouseStore) FetchContainerMetrics(
+	ctx context.Context,
+	tenantID string,
+	agentID string,
+) ([]shared.ContainerMetrics, error) {
+
+	query := `
+		SELECT
+			container_id,
+			hostname,
+			image,
+			status,
+			cpu_percent,
+			mem_used_mb,
+			mem_total_mb,
+			ts
+		FROM container_metrics
+		WHERE tenant_id = ?
+		  AND agent_id = ?
+		ORDER BY ts DESC
+		LIMIT 100
+	`
+
+	rows, err := c.db.QueryContext(ctx, query, tenantID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []shared.ContainerMetrics
+
+	for rows.Next() {
+		var m shared.ContainerMetrics
+		if err := rows.Scan(
+			&m.ContainerID,
+			&m.Hostname,
+			&m.Image,
+			&m.Status,
+			&m.CPUPercent,
+			&m.MemUsedMB,
+			&m.MemTotalMB,
+			&m.Timestamp,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+
+	return result, nil
 }

@@ -9,10 +9,17 @@ type HostMetrics struct {
 	TenantID string `json:"tenant_id"` // multi-tenant
 	AgentID  string `json:"agent_id"`  // unique agent id
 	Hostname string `json:"hostname"`  // host name
-	OS       string `json:"os"`        // add this
-	IP       string `json:"ip"`
-	PublicIP string `json:"public_ip"` // add this
-	Version  string `json:"version"`
+	OS       string `json:"os"`
+
+	PrivateIP string `json:"private_ip"`
+	PublicIP  string `json:"public_ip"`
+	RemoteIP  string `json:"remote_ip,omitempty"`
+	K8sNodeIP string `json:"k8s_node_ip,omitempty"`
+
+	CloudProvider string `json:"cloud_provider"`
+	CloudRegion   string `json:"cloud_region"`
+
+	Version string `json:"version"`
 
 	Cores      int     `json:"cores"`
 	CPUPercent float32 `json:"cpu_percent"` // CPU usage %
@@ -36,10 +43,11 @@ type HostMetrics struct {
 	ProcTotal   int `json:"proc_total"`   // Total number of processes
 	ProcRunning int `json:"proc_running"` // Number of running processes
 
-	UptimeSec  uint64            `json:"uptime_sec"` // Uptime in seconds
-	Tags       map[string]string `json:"tags"`       // key-value tags
-	TTLDays    uint16            `json:"ttl_days"`   // TTL in days (optional)
-	Timestamp  int64             `json:"timestamp"`  // optional: epoch seconds, default now
+	UptimeSec  uint64            `json:"uptime_sec"`  // Uptime in seconds
+	Tags       map[string]string `json:"tags"`        // key-value tags
+	SystemTags map[string]string `json:"system_tags"` // system tags (NEW)
+	TTLDays    uint16            `json:"ttl_days"`    // TTL in days (optional)
+	Timestamp  int64             `json:"timestamp"`   // optional: epoch seconds, default now
 	Interfaces []InterfaceMetric `json:"interfaces,omitempty"`
 	Agent      AgentHealth       `json:"agent"` // optional agent health metrics
 	Services   []ServiceStatus   `json:"services,omitempty"`
@@ -86,12 +94,17 @@ type NetworkInterface struct {
 }
 
 type AgentHealth struct {
-	CPUPercent      float32 `json:"agent_cpu_percent"`
-	MemoryMB        float32 `json:"agent_mem_mb"`
-	Goroutines      int     `json:"agent_goroutines"`
-	UptimeSec       uint64  `json:"agent_uptime_sec"`
-	MetricsFailures uint64  `json:"metrics_send_failures"`
-	LogFailures     uint64  `json:"logs_send_failures"`
+	CPUPercent          float32 `json:"agent_cpu_percent"`
+	MemoryMB            float32 `json:"agent_mem_mb"`
+	Goroutines          int     `json:"agent_goroutines"`
+	UptimeSec           uint64  `json:"agent_uptime_sec"`
+	MetricsFailures     uint64  `json:"metrics_send_failures"`
+	LogFailures         uint64  `json:"logs_send_failures"`
+	QueueSizeBytes      int64   `json:"queue_size_bytes"`
+	LogQueueSizeBytes   int64   `json:"log_queue_size_bytes"`
+	ConsecutiveFailures int32   `json:"consecutive_failures"`
+	LastSendSuccessUnix int64   `json:"last_send_success_unix"`
+	MetadataUpdates     uint64  `json:"metadata_updates"`
 }
 
 type Event struct {
@@ -148,28 +161,33 @@ type APIKey struct {
 // AgentInfo: for agent metadata & heartbeat
 // -------------------------------
 type AgentInfo struct {
-	TenantID    string            `json:"tenant_id"`
-	AgentID     string            `json:"agent_id"`
-	Hostname    string            `json:"hostname"`
-	IP          string            `json:"ip"`
-	PublicIP    string            `json:"public_ip"`
-	OS          string            `json:"os"`
-	Version     string            `json:"version"`
-	Environment string            `json:"environment"`
-	Tags        map[string]string `json:"tags"`
-	FirstSeen   time.Time         `json:"first_seen"`
-	LastSeen    time.Time         `json:"last_seen"`
-	Alive       bool              `json:"alive"`
+	TenantID      string            `json:"tenant_id"`
+	AgentID       string            `json:"agent_id"`
+	Hostname      string            `json:"hostname"`
+	PrivateIP     string            `json:"private_ip"`
+	PublicIP      string            `json:"public_ip"`
+	RemoteIP      string            `json:"remote_ip"`
+	K8sNodeIP     string            `json:"k8s_node_ip"`
+	OS            string            `json:"os"`
+	Version       string            `json:"version"`
+	Environment   string            `json:"environment"`
+	CloudProvider string            `json:"cloud_provider"`
+	CloudRegion   string            `json:"cloud_region"`
+	Tags          map[string]string `json:"tags"`
+	SystemTags    map[string]string `json:"system_tags"`
+	FirstSeen     time.Time         `json:"first_seen"`
+	LastSeen      time.Time         `json:"last_seen"`
+	Alive         bool              `json:"alive"`
 }
 
 // -------------------------------
 // Heartbeat struct (optional for API)
 // -------------------------------
 type Heartbeat struct {
-	TenantID  string    `json:"tenant_id"`
-	AgentID   string    `json:"agent_id"`
-	Hostname  string    `json:"hostname"`
-	Timestamp time.Time `json:"timestamp"` // epoch seconds
+	TenantID  string `json:"tenant_id"`
+	AgentID   string `json:"agent_id"`
+	Hostname  string `json:"hostname"`
+	Timestamp int64  `json:"timestamp"` // epoch seconds
 }
 
 type ContainerMetrics struct {

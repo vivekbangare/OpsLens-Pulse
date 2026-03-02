@@ -5,9 +5,7 @@ export async function fetchHosts() {
 }
 
 export async function fetchHostSummary(agentId: string) {
-  return apiPost("/api/hosts/summary", {
-    agent_id: agentId,
-  })
+  return apiGet(`/api/hosts/summary?agent_id=${agentId}`)
 }
 
 export async function fetchLogs(agentId: string) {
@@ -15,7 +13,5 @@ export async function fetchLogs(agentId: string) {
 }
 
 export async function fetchContainerMetrics(agentId: string) {
-  return apiPost("/api/container/metrics", {
-    agent_id: agentId,
-  })
+  return apiGet(`/api/containers/metrics?agent_id=${agentId}`)
 }

@@ -6,6 +6,8 @@ export default defineConfig({
   base: "/",
   plugins: [react()],
   build: {
+    outDir: "dist",      // default
+    emptyOutDir: true,
     chunkSizeWarningLimit: 1000,
   },
 })
@@ -23,6 +25,8 @@ import { AuthProvider } from "./features/auth/AuthContext"
 import { SearchProvider } from "./context/SearchContext"
 import ErrorBoundary from "./shared/components/common/ErrorBoundary"
 
+// 🔥 Initialize theme BEFORE React loads
+const savedTheme = localStorage.getItem("theme") || "dark"
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <BrowserRouter>
@@ -102,7 +106,7 @@ import AIPage from "../features/ai/AIPage"
 export default function AppRoutes() {
   return (
     <Routes>
-      {/* Public */}
+      
       <Route path="/login" element={<Login />} />
 
       {/* Protected */}
@@ -111,7 +115,7 @@ export default function AppRoutes() {
           <Route index element={<Navigate to="/fleet" replace />} />
           <Route path="fleet" element={<FleetPage />} />
           <Route path="hosts" element={<Hosts />} />
-          <Route path="hosts/:agentId" element={<HostDetailsWrapper />} />
+          <Route path="hosts/:agentId" element={<HostDetails />} />
           <Route path="logs" element={<LogsExplorer />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="admin" element={<Admin />} />
@@ -125,34 +129,103 @@ export default function AppRoutes() {
   )
 }
 
-function HostDetailsWrapper() {
-  const { agentId } = require("react-router-dom").useParams()
-  if (!agentId) return null
-  return <HostDetails agentId={agentId} />
-}
-===== FILE: ./src/app/providers.tsx =====
-
 ===== FILE: ./src/layout/Topbar.tsx =====
-export default function Topbar() {
+import { useState, useEffect } from "react"
+import GlobalSearch from "../shared/components/GlobalSearch"
+import {
+  Bell,
+  HelpCircle,
+  Moon,
+  Sun,
+  ChevronDown,
+} from "lucide-react"
+
+export default function TopBar() {
+  const [isDark, setIsDark] = useState(true)
+  const [open, setOpen] = useState(false)
+
+  // Load saved theme
+  useEffect(() => {
+    const saved = localStorage.getItem("theme")
+
+    if (saved === "light") {
+      document.documentElement.classList.remove("dark")
+      document.documentElement.classList.add("light")
+      setIsDark(false)
+    } else {
+      document.documentElement.classList.remove("light")
+      document.documentElement.classList.add("dark")
+      setIsDark(true)
+    }
+  }, [])
+
+  function toggleTheme() {
+    const html = document.documentElement
+    const current = html.getAttribute("data-theme")
+
+    if (current === "dark") {
+      html.setAttribute("data-theme", "light")
+      localStorage.setItem("theme", "light")
+      setIsDark(false)
+    } else {
+      html.setAttribute("data-theme", "dark")
+      localStorage.setItem("theme", "dark")
+      setIsDark(true)
+    }
+  }
+
   return (
     <div className="topbar">
-      <div className="search">
-        <input placeholder="Search hosts, logs..." />
+
+      {/* 🔍 Global Search (Left Side) */}
+      <div className="topbarLeft">
+         <GlobalSearch />
       </div>
-      <button
-        onClick={() =>
-          document.documentElement.setAttribute(
-            "data-theme",
-            document.documentElement.getAttribute("data-theme") === "dark"
-              ? "light"
-              : "dark"
-          )
-        }
-      >
-        Toggle Theme
-      </button>
-      <div className="user">
-        <div className="avatar">A</div>
+
+      {/* Right Section */}
+      <div className="topbarRight">
+
+        {/* Help */}
+        <div className="topIcon">
+          <HelpCircle size={18} />
+        </div>
+
+        {/* Notifications */}
+        <div className="topIcon notification">
+          <Bell size={18} />
+          <span className="badge">3</span>
+        </div>
+
+        {/* Theme Toggle */}
+        <div
+          className="topIcon theme"
+          onClick={toggleTheme}
+        >
+          {isDark ? (
+            <Sun size={18} />
+          ) : (
+            <Moon size={18} />
+          )}
+        </div>
+
+        {/* User Dropdown */}
+        <div
+          className="userSection"
+          onClick={() => setOpen(!open)}
+        >
+          <div className="avatar">V</div>
+          <span>Vivek</span>
+          <ChevronDown size={16} />
+
+          {open && (
+            <div className="dropdown">
+              <div>Profile</div>
+              <div>Settings</div>
+              <div className="danger">Logout</div>
+            </div>
+          )}
+        </div>
+
       </div>
     </div>
   )
@@ -226,7 +299,7 @@ export default function Sidebar() {
 ===== FILE: ./src/features/auth/Login.tsx =====
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { useAuth } from "../auth/AuthContext"
+import { useAuth } from "./AuthContext"
 import { loginRequest } from "./api"
 
 function parseJwt(token: string) {
@@ -263,27 +336,9 @@ export default function Login() {
     setError("")
 
     try {
-      // const res = await fetch("/api/login", {
-      //   method: "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify({ username, password }),
-      // })
-
-      // if (!res.ok) {
-      //   throw new Error("Invalid credentials")
-      // }
-
-      // const data = await res.json()
-
       const data = await loginRequest(username, password)
 
-      if (!data.token) {
-        throw new Error("Token missing in response")
-      }
-
-      // 🔥 Decode token
       const payload = parseJwt(data.token)
-      console.log("JWT PAYLOAD:", payload)
 
       if (!payload) {
         throw new Error("Invalid token payload")
@@ -292,8 +347,8 @@ export default function Login() {
       login({
         token: data.token,
         user: {
-          id: payload.sub || "1",
-          username: payload.username || payload.sub || "admin",
+          id: payload.user_id || payload.sub || "1",
+          username: payload.username || "admin",
           email: payload.email || "",
           is_super_admin: payload.is_super_admin || false,
           tenants: payload.tenants || [],
@@ -354,155 +409,111 @@ export default function Login() {
   )
 }
 ===== FILE: ./src/features/auth/api.ts =====
-import { apiPost } from "../../shared/lib/api/client"
-
-export async function loginRequest(
-  username: string,
-  password: string
-) {
-  return apiPost("/api/login", {
-    username,
-    password,
+export async function loginRequest(username: string, password: string) {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
   })
+
+  if (!res.ok) {
+    throw new Error("Invalid credentials")
+  }
+
+  const json = await res.json()
+
+  // Expected backend format:
+  // {
+  //   data: { token: "..." },
+  //   message: "...",
+  //   request_id: "..."
+  // }
+
+  if (!json?.data?.token) {
+    console.error("LOGIN RAW RESPONSE:", json)
+    throw new Error("Token missing in response")
+  }
+
+  return {
+    token: json.data.token,
+  }
 }
 ===== FILE: ./src/features/auth/AuthContext.tsx =====
-import {
-  createContext,
-  useContext,
-  useState,
-  useEffect,
-  ReactNode,
-} from "react"
-
-export interface Tenant {
-  id: string
-  name: string
-  slug: string
-}
+import { createContext, useContext, useState, ReactNode } from "react"
 
 export interface User {
   id: string
   username: string
-  email: string
+  email?: string
   is_super_admin?: boolean
-  currentTenantId?: string
-  tenants?: Tenant[]
-  permissions?: string[]
+  tenants?: any[]
+  currentTenantId?: string | null
 }
 
-interface AuthContextType {
+interface AuthState {
   token: string | null
   user: User | null
-  login: (data: { token: string; user: User }) => void
-  logout: () => void
-  updateTenant: (tenantId: string) => void
   isAuthenticated: boolean
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(
-  undefined
-)
-
-// -----------------------------
-// SAFE STORAGE HELPERS
-// -----------------------------
-function safeParse<T>(value: string | null): T | null {
-  if (!value || value === "undefined" || value === "null") {
-    return null
-  }
-
-  try {
-    return JSON.parse(value)
-  } catch {
-    return null
-  }
+interface AuthContextType extends AuthState {
+  login: (data: { token: string; user: User }) => void
+  logout: () => void
 }
 
+const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(null)
-  const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(
+    localStorage.getItem("token")
+  )
 
-  // -----------------------------
-  // LOAD FROM STORAGE (SAFE)
-  // -----------------------------
-  useEffect(() => {
-    const storedToken = sessionStorage.getItem("token")
-    const storedUser = safeParse<User>(
-      sessionStorage.getItem("user")
-    )
+  const [user, setUser] = useState<User | null>(
+    localStorage.getItem("user")
+      ? JSON.parse(localStorage.getItem("user")!)
+      : null
+  )
 
-    if (storedToken) setToken(storedToken)
-    if (storedUser) setUser(storedUser)
-  }, [])
+  const isAuthenticated = !!token
 
-  // -----------------------------
-  // LOGIN
-  // -----------------------------
   function login(data: { token: string; user: User }) {
-    console.log("Login User:", data.user)
-
-    if (!data.user){
-      console.error("Login failed: No user data received")
-      return  
-    }
-
-    sessionStorage.setItem("token", data.token)
-    sessionStorage.setItem("user", JSON.stringify(data.user))
-
     setToken(data.token)
     setUser(data.user)
+
+    localStorage.setItem("token", data.token)
+    localStorage.setItem("user", JSON.stringify(data.user))
   }
 
-  // -----------------------------
-  // LOGOUT
-  // -----------------------------
   function logout() {
-    sessionStorage.removeItem("token")
-    sessionStorage.removeItem("user")
-
     setToken(null)
     setUser(null)
-  }
 
-  // -----------------------------
-  // UPDATE TENANT
-  // -----------------------------
-  function updateTenant(tenantId: string) {
-    if (!user) return
-
-    const updatedUser = {
-      ...user,
-      currentTenantId: tenantId,
-    }
-
-    sessionStorage.setItem("user", JSON.stringify(updatedUser))
-    setUser(updatedUser)
-  }
-
-  const value: AuthContextType = {
-    token,
-    user,
-    login,
-    logout,
-    updateTenant,
-    isAuthenticated: !!token,
+    localStorage.removeItem("token")
+    localStorage.removeItem("user")
   }
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider
+      value={{
+        token,
+        user,
+        isAuthenticated,
+        login,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )
 }
 
-export function useAuth(): AuthContextType {
+export function useAuth() {
   const ctx = useContext(AuthContext)
   if (!ctx) {
-    throw new Error("useAuth must be used inside AuthProvider")
+    throw new Error("useAuth must be used within AuthProvider")
   }
   return ctx
 }
-
 ===== FILE: ./src/features/admin/Admin.tsx =====
 import { NavLink, Routes, Route } from "react-router-dom"
 
@@ -540,12 +551,6 @@ export default function Alerts() {
     </div>
   )
 }
-
-===== FILE: ./src/features/dashboard/components/MiniChart.tsx =====
-
-===== FILE: ./src/features/dashboard/components/KPIGrid.tsx =====
-
-===== FILE: ./src/features/dashboard/DashboardPage.tsx =====
 
 ===== FILE: ./src/features/logs/LogExplores.tsx =====
 import { useEffect, useState } from "react"
@@ -745,7 +750,7 @@ export async function fetchLogsTimeline(params: {
 ===== FILE: ./src/features/logs/types.ts =====
 
 ===== FILE: ./src/features/logs/components/TimeRangePicker.tsx =====
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import DatePicker from "react-datepicker"
 import "react-datepicker/dist/react-datepicker.css"
 
@@ -758,66 +763,58 @@ export default function TimeRangePicker({ onApply, disabled }: Props) {
   const [startDate, setStartDate] = useState<Date | null>(null)
   const [endDate, setEndDate] = useState<Date | null>(null)
 
-  function handleApply() {
-    if (!startDate || !endDate) return
-    if (startDate > endDate) {
-      alert("Start date cannot be after end date")
-      return
+  // ✅ AUTO APPLY
+  useEffect(() => {
+    if (startDate && endDate && startDate <= endDate) {
+      onApply(
+        startDate.toISOString(),
+        endDate.toISOString()
+      )
     }
-
-    onApply(
-      startDate.toISOString(),
-      endDate.toISOString()
-    )
-  }
+  }, [startDate, endDate])
 
   return (
-    <div className="timeRangePicker">
+    <div className="timeRangeCompact">
 
-      <DatePicker
-        disabled={disabled}
-        selected={startDate}
-        onChange={(date: Date | null) => setStartDate(date)}
-        showTimeSelect
-        timeFormat="HH:mm"
-        timeIntervals={5}
-        dateFormat="yyyy-MM-dd HH:mm"
-        placeholderText="Start"
-        maxDate={new Date()}
-        popperPlacement="bottom-start"
-        portalId="root"
-        popperClassName="darkDatePicker"
-        calendarClassName="darkCalendar"
-      />
+      <div className="dateWrapper">
+        <span className="calendarIcon">📅</span>
+        <DatePicker
+          disabled={disabled}
+          selected={startDate}
+          onChange={(date: Date | null) => setStartDate(date)}
+          showTimeSelect
+          timeFormat="HH:mm"
+          timeIntervals={5}
+          dateFormat="yyyy-MM-dd HH:mm"
+          placeholderText="Start"
+          maxDate={new Date()}
+          className="dateInputCompact"
+          popperClassName="darkDatePicker"
+          calendarClassName="darkCalendar"
+        />
+      </div>
 
-      <DatePicker
-        disabled={disabled}
-        selected={endDate}
-        onChange={(date: Date | null) => setEndDate(date)}
-        showTimeSelect
-        timeFormat="HH:mm"
-        timeIntervals={5}
-        dateFormat="yyyy-MM-dd HH:mm"
-        placeholderText="End"
-        maxDate={new Date()}
-        popperPlacement="bottom-start"
-        portalId="root"
-        popperClassName="darkDatePicker"
-        calendarClassName="darkCalendar"
-      />
-
-      <button 
-        disabled={disabled}
-        onClick={handleApply} 
-        className="btn secondary"
-    >
-        Apply
-      </button>
+      <div className="dateWrapper">
+        <span className="calendarIcon">📅</span>
+        <DatePicker
+          disabled={disabled}
+          selected={endDate}
+          onChange={(date: Date | null) => setEndDate(date)}
+          showTimeSelect
+          timeFormat="HH:mm"
+          timeIntervals={5}
+          dateFormat="yyyy-MM-dd HH:mm"
+          placeholderText="End"
+          maxDate={new Date()}
+          className="dateInputCompact"
+          popperClassName="darkDatePicker"
+          calendarClassName="darkCalendar"
+        />
+      </div>
 
     </div>
   )
 }
-
 ===== FILE: ./src/features/logs/components/LogsTable.tsx =====
 import { useState } from "react"
 
@@ -1008,6 +1005,7 @@ export default function LogRow({ log, onClick }: LogRowProps) {
 
 ===== FILE: ./src/features/logs/components/LogDetailsModal.tsx =====
 import { useEffect } from "react"
+import { useNavigate } from "react-router-dom"
 
 interface LogDetailsProps {
   log: any
@@ -1018,7 +1016,7 @@ export default function LogDetailsModal({
   log,
   onClose,
 }: LogDetailsProps) {
-
+  const navigate = useNavigate()
   // ESC key support
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -1084,7 +1082,7 @@ ${log.message}
         <div className="modalMessageFlexible">
           <pre>{log.message}</pre>
         </div>
-
+        
         {/* CENTERED ACTIONS */}
         <div className="modalActionsCentered">
           <button onClick={() => navigator.clipboard.writeText(log.message)}>
@@ -1095,7 +1093,7 @@ ${log.message}
             Download .txt
           </button>
 
-          <button onClick={() => window.location.href = `/hosts/${log.agent_id}`}>
+          <button onClick={() => navigate(`/hosts/${log.agent_id}`)}>
             Open Host
           </button>
 
@@ -1161,28 +1159,29 @@ export default function LogsToolbar({
   }
 
   return (
-    <div className="logsToolbar cardPanel">
+    <div className="logsToolbarCompact cardPanel">
 
-      <div className="leftFilters">
+      {/* LEFT SIDE CONTROLS */}
+      <div className="toolbarLeft">
 
         <select
+          className="selectCompact"
           value={preset}
           onChange={(e) => handlePresetChange(e.target.value)}
         >
-          <option value="5m">Last 5 min</option>
-          <option value="15m">Last 15 min</option>
-          <option value="1h">Last 1 hour</option>
-          <option value="24h">Last 24 hours</option>
-          <option value="7d">Last 7 days</option>
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="1h">1h</option>
+          <option value="24h">24h</option>
+          <option value="7d">7d</option>
           <option value="custom">Custom</option>
         </select>
 
-        <TimeRangePicker
-          onApply={onRangeChange}
-          disabled={preset !== "custom"}
-        />
-
-        <select value={level} onChange={(e) => onLevelChange(e.target.value)}>
+        <select
+          className="selectCompact"
+          value={level}
+          onChange={(e) => onLevelChange(e.target.value)}
+        >
           <option value="">All</option>
           <option value="info">Info</option>
           <option value="warn">Warn</option>
@@ -1190,26 +1189,41 @@ export default function LogsToolbar({
           <option value="critical">Critical</option>
         </select>
 
-        <select onChange={(e) => onSourceChange(e.target.value)}>
+        <select
+          className="selectCompact"
+          onChange={(e) => onSourceChange(e.target.value)}
+        >
           <option value="">All Sources</option>
           <option value="host">Hosts</option>
           <option value="container">Containers</option>
         </select>
 
+        {preset === "custom" && (
+          <TimeRangePicker
+            onApply={onRangeChange}
+          />
+        )}
+
       </div>
 
-      <div className="rightActions">
+      {/* RIGHT SIDE */}
+      <div className="toolbarRight">
+
         <input
+          className="searchCompact"
           placeholder="Search logs..."
           onChange={(e) => onSearchChange(e.target.value)}
         />
-        <button className="btn secondary">Live</button>
+
+        <button className="liveBtn">
+          Live
+        </button>
+
       </div>
 
     </div>
   )
 }
-
 ===== FILE: ./src/features/ai/AIPage.tsx =====
 export default function AIPage() {
   return (
@@ -1221,7 +1235,7 @@ export default function AIPage() {
 }
 ===== FILE: ./src/features/hosts/HostDetails.tsx =====
 import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useNavigate, useParams } from "react-router-dom"
 
 import {
   fetchLogs,
@@ -1229,10 +1243,6 @@ import {
   fetchHosts,
   fetchContainerMetrics,
 } from "./api"
-
-interface Props {
-  agentId: string
-}
 
 type Tags = Record<string, string>
 
@@ -1260,8 +1270,12 @@ interface ContainerMetric {
   status: string
 }
 
-export default function HostDetails({ agentId }: Props) {
+export default function HostDetails() {
   const navigate = useNavigate()
+  const { agentId } = useParams<{ agentId: string }>()
+  const id = agentId ?? ""
+
+  if (!id) return null
 
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [summary, setSummary] = useState<HostSummary | null>(null)
@@ -1274,23 +1288,27 @@ export default function HostDetails({ agentId }: Props) {
   useEffect(() => {
     loadAll()
 
-    const interval = setInterval(() => {
-      loadAll()
-    }, 5000)
+    if (!agentId) return
 
-    return () => clearInterval(interval)
-  }, [agentId])
+  const recent = JSON.parse(localStorage.getItem("recentHosts") || "[]")
+
+  const updated = [
+    { agent_id: agentId, hostname: agentId },
+    ...recent.filter((h: any) => h.agent_id !== agentId),
+  ].slice(0, 5)
+
+  localStorage.setItem("recentHosts", JSON.stringify(updated))
+}, [agentId])
 
   async function loadAll() {
     setLoading(true)
-
     try {
       const [summaryData, logData, containerData, hostsData] =
         await Promise.all([
-          fetchHostSummary(agentId),
-          fetchLogs(agentId),
-          fetchContainerMetrics(agentId).catch(() => []),
-          fetchHosts(), // 👈 reuse this
+          fetchHostSummary(id),
+          fetchLogs(id),
+          fetchContainerMetrics(id).catch(() => []),
+          fetchHosts(),
         ])
 
       const currentHost = hostsData.find(
@@ -1312,27 +1330,6 @@ export default function HostDetails({ agentId }: Props) {
     }
   }
 
-  function formatUptime(seconds?: number) {
-    if (!seconds) return "—"
-
-    const hours = Math.floor(seconds / 3600)
-    const days = Math.floor(hours / 24)
-
-    if (days > 0) return `${days}d ${hours % 24}h`
-    return `${hours}h`
-  }
-
-  // ✅ Extract unique sources/types dynamically
-  const sources = [
-    "all",
-    ...Array.from(new Set(logs.map(l => l.source_name).filter(Boolean)))
-  ]
-
-  const types = [
-    "all",
-    ...Array.from(new Set(logs.map(l => l.source_type).filter(Boolean)))
-  ]
-  // ✅ Filter logic (does NOT modify original logs)
   const filteredLogs = logs.filter(l => {
     const sourceMatch =
       selectedSource === "all" || l.source_name === selectedSource
@@ -1344,176 +1341,138 @@ export default function HostDetails({ agentId }: Props) {
   })
 
   return (
-    <div style={{ padding: "20px" }}>
-      <button onClick={() => navigate(-1)}>⬅ Back</button>
+    <div className="pageContainer">
 
-      <h2 style={{ marginTop: "10px" }}>Host Details</h2>
-
-      {loading && <p>Loading data...</p>}
-
-      {/* ================= METRICS ================= */}
-      <div
-        style={{
-          background: "#111827",
-          padding: "20px",
-          borderRadius: "12px",
-          marginBottom: "20px",
-        }}
-      >
-        <h3>Key Metrics (1h)</h3>
-
-        <div
-          style={{
-            display: "flex",
-            gap: "30px",
-            flexWrap: "wrap",
-            marginTop: "10px",
-          }}
-        >
-          <div>
-            <strong>CPU:</strong>{" "}
-            {summary?.cpu_percent !== undefined
-              ? summary.cpu_percent.toFixed(2)
-              : "—"}{" "}
-            %
-          </div>
-
-          <div>
-            <strong>RAM:</strong>{" "}
-            {summary?.mem_used_mb ?? "—"} /{" "}
-            {summary?.mem_total_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Disk Used:</strong>{" "}
-            {summary?.disk_used_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Network In:</strong>{" "}
-            {summary?.network_in_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Network Out:</strong>{" "}
-            {summary?.network_out_mb ?? "—"} MB
-          </div>
-
-          <div>
-            <strong>Uptime:</strong>{" "}
-            {formatUptime(summary?.uptime_sec)}
-          </div>
+      {/* HEADER */}
+      <div className="detailsHeader">
+        <div>
+          <h2>Host Details</h2>
+          <div className="subText">Agent ID: {agentId}</div>
         </div>
-        {/* ================= TAGS ================= */}
-        <div style={{ marginTop: "20px", fontSize: "14px" }}>
-          <strong>Tags:</strong>{" "}
-          {summary?.tags && Object.keys(summary.tags).length > 0 ? (
-            Object.entries(summary.tags).map(([key, value], index, arr) => (
-              <span key={key}>
-                <span style={{ opacity: 0.7 }}>{key}:</span> {value}
-                {index < arr.length - 1 && ", "}
-              </span>
-            ))
-          ) : (
-            <span style={{ opacity: 0.6 }}>No tags</span>
-          )}
-        </div>        
+
+        <button className="filterBtn" onClick={() => navigate(-1)}>
+          ← Back
+        </button>
       </div>
 
-      {/* ================= LOGS ================= */}
-      <div
-        style={{
-          background: "#0f172a",
-          padding: "15px",
-          borderRadius: "12px",
-          marginBottom: "20px",
-        }}
-      >
-        <h3>Logs</h3>
+      {/* METRICS GRID */}
+      <div className="metricsGridCompact">
 
-        {logs.length === 0 && <p>No logs available</p>}
-        {/* 🔽 Filters */}
-        <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
-          <select
-            value={selectedSource}
-            onChange={(e) => setSelectedSource(e.target.value)}
-            style={{
-              padding: "6px",
-              borderRadius: "6px",
-              background: "#1e293b",
-              color: "white",
-              border: "1px solid #334155",
-            }}
-          >
-            {sources.map((src) => (
-              <option key={src} value={src}>
-                Source: {src}
-              </option>
-            ))}
-          </select>
+        <Metric label="CPU">
+          {summary?.cpu_percent?.toFixed(1) ?? "—"} %
+        </Metric>
 
-          <select
-            value={selectedType}
-            onChange={(e) => setSelectedType(e.target.value)}
-            style={{
-              padding: "6px",
-              borderRadius: "6px",
-              background: "#1e293b",
-              color: "white",
-              border: "1px solid #334155",
-            }}
-          >
-            {types.map((t) => (
-              <option key={t} value={t}>
-                Type: {t}
-              </option>
-            ))}
-          </select>
+        <Metric label="RAM">
+          {summary?.mem_used_mb ?? "—"} /{" "}
+          {summary?.mem_total_mb ?? "—"} MB
+        </Metric>
+
+        <Metric label="Disk">
+          {summary?.disk_used_mb ?? "—"} MB
+        </Metric>
+
+        <Metric label="Net In">
+          {summary?.network_in_mb ?? "—"} MB
+        </Metric>
+
+        <Metric label="Net Out">
+          {summary?.network_out_mb ?? "—"} MB
+        </Metric>
+
+        <Metric label="Uptime">
+          {summary?.uptime_sec ?? "—"}
+        </Metric>
+
+      </div>
+
+      {/* TAGS */}
+      <div className="cardPanel compactCard">
+        <strong>Tags:</strong>{" "}
+        {summary?.tags && Object.keys(summary.tags).length > 0
+          ? Object.entries(summary.tags).map(([k, v]) => (
+              <span key={k} className="tagChip">
+                {k}: {v}
+              </span>
+            ))
+          : "No tags"}
+      </div>
+
+      {/* LOGS */}
+      <div className="cardPanel compactCard">
+        <div className="logsHeaderRow">
+          <h3>Logs</h3>
+
+          <div className="logsFiltersCompact">
+            <select
+              className="selectCompact"
+              value={selectedSource}
+              onChange={(e) => setSelectedSource(e.target.value)}
+            >
+              <option value="all">All Sources</option>
+              {Array.from(new Set(logs.map(l => l.source_name).filter(Boolean)))
+                .map((src) => (
+                  <option key={src} value={src}>
+                    {src}
+                  </option>
+                ))}
+            </select>
+
+            <select
+              className="selectCompact"
+              value={selectedType}
+              onChange={(e) => setSelectedType(e.target.value)}
+            >
+              <option value="all">All Types</option>
+              {Array.from(new Set(logs.map(l => l.source_type).filter(Boolean)))
+                .map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+            </select>
+          </div>
         </div>
 
-        {filteredLogs.length === 0 && <p>No logs available</p>}
+        <div className="logsCompact">
+          {filteredLogs.length === 0 && (
+            <div className="subText">No logs available</div>
+          )}
 
-        <div
-          style={{
-            maxHeight: "300px",
-            overflowY: "auto",
-            fontFamily: "monospace",
-            fontSize: "13px",
-            marginTop: "10px",
-          }}
-        >
           {filteredLogs.map((l, i) => (
-            <div key={i} style={{ marginBottom: "4px" }}>
-              {l.timestamp
-                ? new Date(l.timestamp * 1000).toLocaleString()
-                : "—"}{" "}
-              [{l.level ?? "info"}]
-              {l.source_name && ` (${l.source_name})`}
-              {l.source_type && ` [${l.source_type}]`}{" "}
-              {l.message ?? ""}
+            <div key={i} className="logLineCompact">
+              [{l.level}] {l.message}
             </div>
           ))}
         </div>
       </div>
 
-      {/* ================= CONTAINERS ================= */}
-      <div
-        style={{
-          background: "#0f172a",
-          padding: "15px",
-          borderRadius: "12px",
-        }}
-      >
+      {/* CONTAINERS */}
+      <div className="cardPanel compactCard">
         <h3>Containers</h3>
-
-        {containers.length === 0 && <p>No containers detected</p>}
-
-        {containers.map((c, i) => (
-          <div key={i} style={{ marginBottom: "6px" }}>
-            {c.name} — {c.status}
-          </div>
-        ))}
+        {containers.length === 0
+          ? <div className="subText">No containers detected</div>
+          : containers.map((c, i) => (
+              <div key={i} className="logLineCompact">
+                {c.name} — {c.status}
+              </div>
+            ))}
       </div>
+
+    </div>
+  )
+}
+
+function Metric({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="metricCompact">
+      <div className="metricLabel">{label}</div>
+      <div className="metricValue">{children}</div>
     </div>
   )
 }
@@ -1588,60 +1547,69 @@ export default function Hosts() {
 
   return (
     <div className="pageContainer">
+
+      {/* ================= HEADER ================= */}
       <div className="pageHeader">
-        <div>
+        <div className="titleRow">
           <h2>Hosts</h2>
-          <p className="pageSubtitle">
-            Manage infrastructure nodes
-          </p>
+
+          <span className="hostCountBadge">
+            {filteredHosts.length}{" "}
+            {filteredHosts.length === 1 ? "Host" : "Hosts"}
+          </span>
         </div>
 
-        <div className="pageSearch">
+        <p className="pageSubtitle">
+          Manage infrastructure nodes
+        </p>
+      </div>
+
+      {/* ================= CONTROLS ================= */}
+      <div className="hostsControls">
+
+        <div className="searchBox">
           <input
+            className="input"
             placeholder="Search hostname or IP..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
+
+        <div className="statusFilters">
+          {["all", "active", "down"].map((status) => (
+            <button
+              key={status}
+              className={`filterBtn ${
+                statusFilter === status ? "activeFilter" : ""
+              }`}
+              onClick={() =>
+                setStatusFilter(status as any)
+              }
+            >
+              {status.toUpperCase()}
+            </button>
+          ))}
+        </div>
+
       </div>
 
-      <div className="filterChips">
-        {["all", "active", "down"].map((status) => (
-          <button
-            key={status}
-            className={`chip ${
-              statusFilter === status ? "activeChip" : ""
-            }`}
-            onClick={() =>
-              setStatusFilter(status as any)
-            }
-          >
-            {status.toUpperCase()}
-          </button>
-        ))}
-      </div>
+      {/* ================= TABLE ================= */}
+      {loading ? (
+        <div className="cardPanel" style={{ padding: 20 }}>
+          Loading hosts...
+        </div>
+      ) : (
+        <div className="tableWrap">
+          <HostTable
+            hosts={filteredHosts}
+            onSelect={(id) => navigate(`/hosts/${id}`)}
+          />
+        </div>
+      )}
 
-      {loading && <p>Loading...</p>}
-
-      <div className="tableWrap">
-        <HostTable
-          hosts={filteredHosts}
-          onSelect={(id) => navigate(`/hosts/${id}`)}
-        />
-      </div>
     </div>
   )
-}
-===== FILE: ./src/features/hosts/HostDetails.Wrapper.tsx =====
-import { useParams } from "react-router-dom"
-import HostDetails from "./HostDetails"
-
-export default function HostDetailsWrapper() {
-  const { agentId } = useParams()
-
-  if (!agentId) return null
-
-  return <HostDetails agentId={agentId} />
 }
 ===== FILE: ./src/features/hosts/utils/health.ts =====
 export type AgentHealth = {
@@ -1696,6 +1664,38 @@ export function getAgentHealth(h: any): AgentHealth {
     reason: "No metrics available",
   }
 }
+===== FILE: ./src/features/hosts/utils/time.ts =====
+export function formatLastSeen(dateString?: string) {
+  if (!dateString) return { relative: "—", absolute: "" }
+
+  const date = new Date(dateString)
+  const now = new Date()
+
+  const diffMs = now.getTime() - date.getTime()
+  const diffSeconds = Math.floor(diffMs / 1000)
+  const diffMinutes = Math.floor(diffSeconds / 60)
+  const diffHours = Math.floor(diffMinutes / 60)
+  const diffDays = Math.floor(diffHours / 24)
+  const diffYears = Math.floor(diffDays / 365)
+
+  let relative = ""
+
+  if (diffSeconds < 60) {
+    relative = `${diffSeconds}s ago`
+  } else if (diffMinutes < 60) {
+    relative = `${diffMinutes} min ago`
+  } else if (diffHours < 24) {
+    relative = `${diffHours} hr ago`
+  } else if (diffDays < 365) {
+    relative = `${diffDays} day${diffDays > 1 ? "s" : ""} ago`
+  } else {
+    relative = `${diffYears} year${diffYears > 1 ? "s" : ""} ago`
+  }
+
+  const absolute = date.toLocaleString()
+
+  return { relative, absolute }
+}
 ===== FILE: ./src/features/hosts/api.ts =====
 import { apiGet, apiPost } from "../../shared/lib/api/client"
 
@@ -1722,9 +1722,26 @@ export async function fetchContainerMetrics(agentId: string) {
 
 ===== FILE: ./src/features/hosts/components/HostTable.tsx =====
 import { getAgentHealth } from "../utils/health"
+import StatusDots from "./StatusDots"
+import { formatLastSeen } from "../utils/time"
+
+interface Host {
+  agent_id: string
+  hostname: string
+  ip: string
+  public_ip?: string
+  os?: string
+  last_seen?: string
+  alive: boolean
+  tags?: Record<string, string>
+  cpu_percent?: number
+  mem_used_mb?: number
+  mem_total_mb?: number
+  cloud_provider?: string
+}
 
 interface Props {
-  hosts: any[] | null | undefined
+  hosts: Host[] | null | undefined
   onSelect: (id: string) => void
 }
 
@@ -1737,12 +1754,13 @@ export default function HostTable({ hosts, onSelect }: Props) {
     <table className="hostTable">
       <thead>
         <tr>
-          <th>Host</th>
           <th>Status</th>
-          <th>Agent</th>
-          <th>Last Seen</th>
-          <th>IP</th>
+          <th>Host</th>
+          <th>Public IP</th>
           <th>OS</th>
+          <th>Cloud</th>
+          <th>Tags</th>
+          <th>Last Seen</th>
         </tr>
       </thead>
 
@@ -1761,7 +1779,59 @@ export default function HostTable({ hosts, onSelect }: Props) {
               className="hostRow"
               onClick={() => onSelect(h.agent_id)}
             >
-              {/* Host */}
+
+              {/* ================= STATUS (Dual Dot with Tooltips) ================= */}
+              <td>
+                <div className="statusDualWrapper">
+
+                  {/* ================= HOST DOT ================= */}
+                  <div className="dotWrapper">
+                    <span
+                      className={`dot ${h.alive ? "good" : "bad"}`}
+                    ></span>
+
+                    <div className="dotTooltip">
+                      <div className="tooltipTitle">Host</div>
+                      <div className="tooltipRow">
+                        Status: {h.alive ? "Online" : "Offline"}
+                      </div>
+
+                      {h.cpu_percent !== undefined && (
+                        <div className="tooltipRow">
+                          CPU: {h.cpu_percent.toFixed(0)}%
+                        </div>
+                      )}
+
+                      {memPercent && (
+                        <div className="tooltipRow">
+                          Memory: {memPercent}%
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* ================= AGENT DOT ================= */}
+                  <div className="dotWrapper">
+                    <span
+                      className={`dot ${health.className}`}
+                    ></span>
+
+                    <div className="dotTooltip">
+                      <div className="tooltipTitle">Agent</div>
+                      <div className="tooltipRow">
+                        Status: {health.label}
+                      </div>
+
+                      <div className="tooltipReason">
+                        {health.reason}
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </td>
+
+              {/* ================= HOST ================= */}
               <td>
                 <div className="hostCell">
                   <div className="hostName">{h.hostname}</div>
@@ -1769,59 +1839,71 @@ export default function HostTable({ hosts, onSelect }: Props) {
                 </div>
               </td>
 
-              {/* Host Status */}
+              {/* ================= PUBLIC IP ================= */}
+              <td>{h.public_ip || "—"}</td>
+
+              {/* ================= OS ================= */}
+              <td>{h.os || "—"}</td>
+
+              {/* ================= CLOUD ================= */}
               <td>
-                <span className="status">
-                  <span
-                    className={`dot ${h.alive ? "good" : "bad"}`}
-                  ></span>
-                  {h.alive ? "Online" : "Offline"}
+                <span className="cloudBadge">
+                  {h.cloud_provider || "—"}
                 </span>
               </td>
 
-              {/* Agent Health */}
+              {/* ================= CLOUD ================= */}
               <td>
-                <div className="healthWrapper">
-                  <span className={`healthBadge ${health.className}`}>
-                    {health.label}
-                  </span>
+                {h.tags && typeof h.tags === "object" ? (
+                  <div className="tagsWrapper">
+                    {Object.entries(h.tags as Record<string, string>)
+                      .slice(0, 3)
+                      .map(([key, value]) => (
+                        <span key={key} className="tagPill">
+                          {String(key)}: {String(value)}
+                        </span>
+                      ))}
 
-                  <div className="healthTooltip">
-                    <div className="tooltipTitle">
-                      {health.label}
-                    </div>
+                    {Object.keys(h.tags).length > 3 && (
+                      <div className="moreTagsWrapper">
+                        <span className="tagMore">
+                          +{Object.keys(h.tags).length - 3}
+                        </span>
 
-                    {h.cpu_percent !== undefined && (
-                      <div className="tooltipRow">
-                        CPU: {h.cpu_percent.toFixed(0)}%
+                        <div className="tagsTooltip">
+                          {Object.entries(h.tags as Record<string, string>)
+                            .slice(3)
+                            .map(([key, value]) => (
+                              <div key={key} className="tooltipRow">
+                                {String(key)}: {String(value)}
+                              </div>
+                            ))}
+                        </div>
                       </div>
                     )}
-
-                    {memPercent && (
-                      <div className="tooltipRow">
-                        Memory: {memPercent}%
-                      </div>
-                    )}
-
-                    <div className="tooltipReason">
-                      {health.reason}
-                    </div>
                   </div>
-                </div>
+                ) : (
+                  "—"
+                )}
               </td>
 
-              {/* Last Seen */}
+              {/* ================= LAST SEEN ================= */}
               <td>
-                {h.last_seen
-                  ? new Date(h.last_seen).toLocaleString()
-                  : "—"}
+                {h.last_seen ? (
+                  (() => {
+                    const { relative, absolute } = formatLastSeen(h.last_seen)
+                    return (
+                      <div className="lastSeenCell">
+                        <div className="lastSeenRelative">{relative}</div>
+                        <div className="lastSeenAbsolute">{absolute}</div>
+                      </div>
+                    )
+                  })()
+                ) : (
+                  "—"
+                )}
               </td>
 
-              {/* IP */}
-              <td>{h.public_ip || "—"}</td>
-
-              {/* OS */}
-              <td>{h.os || "—"}</td>
             </tr>
           )
         })}
@@ -2123,12 +2205,97 @@ function Sparkline({ data }: { data: number[] }) {
 }
 
 
-===== FILE: ./src/features/hosts/components/HostCard.tsx =====
+===== FILE: ./src/features/hosts/components/StatusDots.tsx =====
+import React from "react"
 
+type Props = {
+  hostAlive: boolean
+  cpu?: number
+  memUsed?: number
+  memTotal?: number
+  lastSeen?: string
+}
+
+function getHostHealth(cpu?: number, memUsed?: number, memTotal?: number) {
+  if (!cpu || !memUsed || !memTotal) return "unknown"
+
+  const memPercent = (memUsed / memTotal) * 100
+
+  if (cpu > 95 || memPercent > 95) return "critical"
+  if (cpu > 80 || memPercent > 85) return "warning"
+  return "healthy"
+}
+
+function getAgentHealth(alive: boolean) {
+  return alive ? "healthy" : "offline"
+}
+
+export default function StatusDots({
+  hostAlive,
+  cpu,
+  memUsed,
+  memTotal,
+}: Props) {
+  const hostHealth = getHostHealth(cpu, memUsed, memTotal)
+  const agentHealth = getAgentHealth(hostAlive)
+
+  return (
+    <div className="statusDots">
+      <span
+        className={`dot ${hostHealth}`}
+        title={`Host: ${hostHealth}`}
+      />
+      <span
+        className={`dot ${agentHealth}`}
+        title={`Agent: ${agentHealth}`}
+      />
+    </div>
+  )
+}
 ===== FILE: ./src/features/fleet/FleetPage.tsx =====
+import { useEffect, useState, useMemo } from "react"
 import StatCard from "../../shared/components/ui/StatCard"
+import { fetchHosts } from "../hosts/api"
+import { useNavigate } from "react-router-dom"
 
-export default function FleetOverview() {
+type Host = {
+  agent_id: string
+  hostname: string
+  alive: boolean
+  cpu_percent?: number
+  mem_used_mb?: number
+  mem_total_mb?: number
+}
+
+export default function FleetPage() {
+  const [hosts, setHosts] = useState<Host[]>([])
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  async function load() {
+    try {
+      const data = await fetchHosts()
+      setHosts(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error("Failed to load fleet:", err)
+    }
+  }
+
+  const total = hosts.length
+  const alive = hosts.filter(h => h.alive).length
+  const dead = total - alive
+
+  const fleetHealth = useMemo(() => {
+    if (!total) return "—"
+    return Math.round((alive / total) * 100) + "%"
+  }, [alive, total])
+
+  // Recently visited (stored locally)
+  const recent = JSON.parse(localStorage.getItem("recentHosts") || "[]")
+
   return (
     <div>
       <h2>Fleet Overview</h2>
@@ -2136,18 +2303,34 @@ export default function FleetOverview() {
         Real-time infrastructure health summary
       </p>
 
+      {/* Stats */}
       <div className="grid">
-        <StatCard label="Total Hosts" value={12} />
-        <StatCard label="Alive" value={10} />
-        <StatCard label="Dead" value={2} />
-        <StatCard label="Fleet Health" value="83%" />
+        <StatCard label="Total Hosts" value={total} />
+        <StatCard label="Alive" value={alive} />
+        <StatCard label="Dead" value={dead} />
+        <StatCard label="Fleet Health" value={fleetHealth} />
+      </div>
+
+      {/* Recently Visited */}
+      <div className="cardPanel" style={{ marginTop: 20 }}>
+        <h3>Recently Visited Hosts</h3>
+
+        {recent.length === 0 ? (
+          <div className="subText">No recent hosts</div>
+        ) : (
+          recent.slice(0, 5).map((h: any) => (
+            <div
+              key={h.agent_id}
+              className="recentHostItem"
+              onClick={() => navigate(`/hosts/${h.agent_id}`)}
+            >
+              {h.hostname}
+            </div>
+          ))
+        )}
       </div>
     </div>
   )
-}
-===== FILE: ./src/shared/config/env.ts =====
-export const ENV = {
-  USE_MOCKS: import.meta.env.VITE_USE_MOCKS === "true",
 }
 ===== FILE: ./src/shared/components/ui/StatCard.tsx =====
 import "./statcard.css"
@@ -2166,8 +2349,6 @@ export default function StatCard({ label, value }: Props) {
   )
 }
 ===== FILE: ./src/shared/components/AIBox.tsx =====
-
-===== FILE: ./src/shared/components/common/Tabs.tsx =====
 
 ===== FILE: ./src/shared/components/common/ErrorBoundary.tsx =====
 import React from "react"
@@ -2213,94 +2394,213 @@ export default class ErrorBoundary extends React.Component<
   }
 }
 
-===== FILE: ./src/shared/lib/api/mock.ts =====
-function base64UrlEncode(obj: any) {
-  return btoa(JSON.stringify(obj))
-    .replace(/=/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
+===== FILE: ./src/shared/components/GlobalSearch.tsx =====
+import {
+  useEffect,
+  useState,
+  useRef,
+  KeyboardEvent,
+} from "react"
+import { useNavigate } from "react-router-dom"
+import { Search } from "lucide-react"
+import { apiPost } from "../lib/api/client"
+
+interface ResultItem {
+  type: "host" | "log" | "alert"
+  label: string
+  sub?: string
+  route: string
 }
 
-export async function mockGet(url: string) {
-  if (url.includes("/api/hosts")) {
-    return [
-      {
-        agent_id: "1",
-        hostname: "opslens-agent",
-        alive: true,
-        ip: "172.18.0.7",
-        public_ip: "1.1.1.1",
-        os: "linux",
-        first_seen: new Date().toISOString(),
-        last_seen: new Date().toISOString(),
-      },
-    ]
-  }
+export default function GlobalSearch() {
+  const [query, setQuery] = useState("")
+  const [results, setResults] = useState<ResultItem[]>([])
+  const [open, setOpen] = useState(false)
+  const [selectedIndex, setSelectedIndex] = useState(0)
 
-  if (url.includes("/api/logs")) {
-    return [
-      {
-        ts: Math.floor(Date.now() / 1000),
-        level: "ERROR",
-        message: "Mock log error",
-        source_name: "container-1",
-      },
-    ]
-  }
-  if (url.includes("/api/login")) {
-    return {
-        token:
-        "mock.token.value." +
-        btoa(
-            JSON.stringify({
-            sub: "1",
-            username: "demo",
-            email: "demo@opslens.io",
-            is_super_admin: true,
-            tenants: [
-                { id: "t1", name: "Demo Tenant", slug: "demo" },
-            ],
-            currentTenantId: "t1",
-            })
-        ),
-    }
+  const navigate = useNavigate()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  // ----------------------------------
+  // ⌘K / Ctrl+K Shortcut
+  // ----------------------------------
+  useEffect(() => {
+    function handleShortcut(e: KeyboardEvent | any) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault()
+        inputRef.current?.focus()
+        setOpen(true)
+      }
     }
 
-  return []
-}
+    window.addEventListener("keydown", handleShortcut)
+    return () => window.removeEventListener("keydown", handleShortcut)
+  }, [])
 
-
-
-export async function mockPost(url: string, body: any) {
-  if (url.includes("/api/login")) {
-    const header = { alg: "HS256", typ: "JWT" }
-
-    const payload = {
-      sub: "1",
-      username: "demo",
-      email: "demo@opslens.io",
-      is_super_admin: true,
-      tenants: [
-        { id: "t1", name: "Demo Tenant", slug: "demo" },
-      ],
-      currentTenantId: "t1",
+  // ----------------------------------
+  // Debounced Search
+  // ----------------------------------
+  useEffect(() => {
+    if (!query) {
+      setResults([])
+      return
     }
 
-    const token =
-      base64UrlEncode(header) +
-      "." +
-      base64UrlEncode(payload) +
-      ".mocksignature"
+    const timer = setTimeout(async () => {
+      try {
+        const data = await apiPost("/api/search/global", { query })
 
-    return { token }
+        const combined: ResultItem[] = []
+
+        data?.hosts?.forEach((h: any) => {
+          combined.push({
+            type: "host",
+            label: h.hostname,
+            sub: h.ip,
+            route: `/hosts/${h.agent_id}`,
+          })
+        })
+
+        data?.logs?.length &&
+          combined.push({
+            type: "log",
+            label: `Logs containing "${query}"`,
+            route: `/logs?query=${query}`,
+          })
+
+        data?.alerts?.forEach((a: any) => {
+          combined.push({
+            type: "alert",
+            label: a.title,
+            route: `/alerts`,
+          })
+        })
+
+        setResults(combined)
+        setOpen(true)
+        setSelectedIndex(0)
+
+      } catch (err) {
+        console.error("Search error:", err)
+      }
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [query])
+
+  // ----------------------------------
+  // Close on outside click
+  // ----------------------------------
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (
+        wrapperRef.current &&
+        !wrapperRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside)
+  }, [])
+
+  // ----------------------------------
+  // Keyboard Navigation
+  // ----------------------------------
+  function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (!open) return
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      setSelectedIndex((prev) =>
+        prev < results.length - 1 ? prev + 1 : prev
+      )
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault()
+      setSelectedIndex((prev) =>
+        prev > 0 ? prev - 1 : prev
+      )
+    }
+
+    if (e.key === "Enter") {
+      e.preventDefault()
+      const selected = results[selectedIndex]
+      if (selected) {
+        navigate(selected.route)
+        setOpen(false)
+        setQuery("")
+      }
+    }
+
+    if (e.key === "Escape") {
+      setOpen(false)
+    }
   }
 
-  return []
+  // ----------------------------------
+  // Highlight matching text
+  // ----------------------------------
+  function highlight(text: string) {
+    if (!query) return text
+    const regex = new RegExp(`(${query})`, "gi")
+    return text.split(regex).map((part, i) =>
+      regex.test(part) ? (
+        <span key={i} className="highlight">
+          {part}
+        </span>
+      ) : (
+        part
+      )
+    )
+  }
+
+  return (
+    <div className="globalSearch" ref={wrapperRef}>
+      <Search size={16} className="searchIcon" />
+      <input
+        ref={inputRef}
+        placeholder="Search anything... (⌘K)"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onFocus={() => query && setOpen(true)}
+        onKeyDown={handleKeyDown}
+      />
+
+      {open && results.length > 0 && (
+        <div className="searchDropdown">
+          {results.map((item, index) => (
+            <div
+              key={index}
+              className={`searchItem ${
+                selectedIndex === index ? "active" : ""
+              }`}
+              onClick={() => {
+                navigate(item.route)
+                setOpen(false)
+                setQuery("")
+              }}
+            >
+              <div>
+                {highlight(item.label)}
+              </div>
+              {item.sub && (
+                <div className="subText">
+                  {item.sub}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 ===== FILE: ./src/shared/lib/api/client.ts =====
 import { User } from "../../../features/auth/AuthContext"
-import { mockGet, mockPost } from "./mock"
-import { ENV } from "../../config/env"
 
 function safeParse<T>(value: string | null): T | null {
   if (!value || value === "undefined" || value === "null") {
@@ -2315,45 +2615,46 @@ function safeParse<T>(value: string | null): T | null {
 }
 
 export function getHeaders(): HeadersInit {
-  const token = sessionStorage.getItem("token")
-
-  const user = safeParse<User>(
-    sessionStorage.getItem("user")
-  )
+  const token = localStorage.getItem("token")
 
   if (!token) return {}
 
   return {
     Authorization: "Bearer " + token,
-    "X-Tenant-ID": user?.currentTenantId || "",
     "Content-Type": "application/json",
   }
 }
 
 export async function apiGet(url: string) {
-  if (ENV.USE_MOCKS) {
-    return mockGet(url)
-  }
-
   const res = await fetch(url, {
     headers: getHeaders(),
   })
+
+  if (res.status === 401) {
+    localStorage.clear()
+    window.location.href = "/login"
+    return
+  }
 
   if (!res.ok) throw new Error(`API error ${res.status}`)
   return res.json()
 }
 
 export async function apiPost(url: string, body: any) {
-  if (ENV.USE_MOCKS) {
-    return mockPost(url, body)
-  }
-
   const res = await fetch(url, {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify(body),
   })
 
+  if (res.status === 401) {
+    localStorage.clear()
+    window.location.href = "/login"
+    return
+  }
+
   if (!res.ok) throw new Error(`API error ${res.status}`)
   return res.json()
 }
+===== FILE: ./src/vite-env.d.ts =====
+/// <reference types="vite/client" />

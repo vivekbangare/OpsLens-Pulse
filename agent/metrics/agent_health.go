@@ -16,12 +16,17 @@ var (
 )
 
 type AgentHealth struct {
-	CPUPercent      float32 `json:"agent_cpu_percent"`
-	MemoryMB        float32 `json:"agent_mem_mb"`
-	Goroutines      int     `json:"agent_goroutines"`
-	UptimeSec       uint64  `json:"agent_uptime_sec"`
-	MetricsFailures uint64  `json:"metrics_send_failures"`
-	LogFailures     uint64  `json:"logs_send_failures"`
+	CPUPercent          float32 `json:"agent_cpu_percent"`
+	MemoryMB            float32 `json:"agent_mem_mb"`
+	Goroutines          int     `json:"agent_goroutines"`
+	UptimeSec           uint64  `json:"agent_uptime_sec"`
+	MetricsFailures     uint64  `json:"metrics_send_failures"`
+	LogFailures         uint64  `json:"logs_send_failures"`
+	QueueSizeBytes      int64   `json:"metrics_queue_bytes"`
+	LogQueueSizeBytes   int64   `json:"logs_queue_bytes"`
+	ConsecutiveFailures int32   `json:"consecutive_failures"`
+	LastSendSuccessUnix int64   `json:"last_send_success_unix"`
+	MetadataUpdates     uint64  `json:"metadata_updates"`
 }
 
 // Call this when metrics sending fails

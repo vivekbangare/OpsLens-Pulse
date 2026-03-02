@@ -1,59 +1,60 @@
-import { User } from "../../../features/auth/AuthContext"
-import { mockGet, mockPost } from "./mock"
-import { ENV } from "../../config/env"
-
-function safeParse<T>(value: string | null): T | null {
-  if (!value || value === "undefined" || value === "null") {
-    return null
-  }
-
-  try {
-    return JSON.parse(value)
-  } catch {
-    return null
-  }
-}
-
 export function getHeaders(): HeadersInit {
-  const token = sessionStorage.getItem("token")
+  const token = localStorage.getItem("token")
 
-  const user = safeParse<User>(
-    sessionStorage.getItem("user")
-  )
-
-  if (!token) return {}
-
-  return {
-    Authorization: "Bearer " + token,
-    "X-Tenant-ID": user?.currentTenantId || "",
+  const headers: HeadersInit = {
     "Content-Type": "application/json",
   }
+
+  if (token) {
+    headers["Authorization"] = "Bearer " + token
+  }
+
+  return headers
+}
+
+// Centralized unauthorized handler
+function handleUnauthorized() {
+  localStorage.removeItem("token")
+  localStorage.removeItem("user")
+
+  // Let React routing handle redirect via ProtectedRoute
+  // Trigger a soft reload to re-evaluate auth state
+  window.history.replaceState(null, "", "/login")
+  window.dispatchEvent(new Event("auth:logout"))
 }
 
 export async function apiGet(url: string) {
-  if (ENV.USE_MOCKS) {
-    return mockGet(url)
-  }
-
   const res = await fetch(url, {
     headers: getHeaders(),
   })
 
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error("Unauthorized")
+  }
+
+  if (!res.ok) {
+    throw new Error(`API error ${res.status}`)
+  }
+
   return res.json()
 }
 
 export async function apiPost(url: string, body: any) {
-  if (ENV.USE_MOCKS) {
-    return mockPost(url, body)
-  }
-
   const res = await fetch(url, {
     method: "POST",
     headers: getHeaders(),
     body: JSON.stringify(body),
   })
 
-  if (!res.ok) throw new Error(`API error ${res.status}`)
+  if (res.status === 401) {
+    handleUnauthorized()
+    throw new Error("Unauthorized")
+  }
+
+  if (!res.ok) {
+    throw new Error(`API error ${res.status}`)
+  }
+
   return res.json()
 }

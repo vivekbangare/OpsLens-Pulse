@@ -211,7 +211,10 @@ ON CONFLICT DO NOTHING;
 -- DEFAULT TENANT
 -- =========================================================
 INSERT INTO tenants (name, slug, plan)
-VALUES ('Default Tenant', 'default-tenant', 'enterprise')
+VALUES 
+    ('Default Tenant', 'default-tenant', 'enterprise'),
+    ('Test Tenant 1', 'test-tenant-1', 'pro'),
+    ('Test Tenant 2', 'test-tenant-2', 'free')
 ON CONFLICT DO NOTHING;
 
 -- =========================================================
@@ -220,7 +223,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO roles (tenant_id, name, description)
 SELECT id, 'admin', 'Full access role'
 FROM tenants
-WHERE slug = 'default-tenant'
+WHERE slug IN ('default-tenant', 'test-tenant-1', 'test-tenant-2')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO role_permissions (role_id, permission_id)
@@ -229,7 +232,7 @@ FROM roles r
 CROSS JOIN permissions p
 JOIN tenants t ON r.tenant_id = t.id
 WHERE r.name = 'admin'
-AND t.slug = 'default-tenant'
+AND t.slug IN ('default-tenant', 'test-tenant-1', 'test-tenant-2')
 ON CONFLICT DO NOTHING;
 
 -- =========================================================
@@ -238,7 +241,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO groups (tenant_id, name)
 SELECT id, 'administrators'
 FROM tenants
-WHERE slug = 'default-tenant'
+WHERE slug IN ('default-tenant', 'test-tenant-1', 'test-tenant-2')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO group_roles (group_id, role_id)
@@ -248,7 +251,7 @@ JOIN roles r ON g.tenant_id = r.tenant_id
 JOIN tenants t ON g.tenant_id = t.id
 WHERE g.name = 'administrators'
 AND r.name = 'admin'
-AND t.slug = 'default-tenant'
+AND t.slug IN ('default-tenant', 'test-tenant-1', 'test-tenant-2')
 ON CONFLICT DO NOTHING;
 
 -- =========================================================
@@ -266,7 +269,7 @@ ON CONFLICT (username) DO NOTHING;
 INSERT INTO user_tenants (user_id, tenant_id)
 SELECT u.id, t.id
 FROM users u
-JOIN tenants t ON t.slug = 'default-tenant'
+JOIN tenants t ON t.slug IN ('default-tenant', 'test-tenant-1', 'test-tenant-2')
 WHERE u.username = 'admin'
 ON CONFLICT DO NOTHING;
 
@@ -276,5 +279,5 @@ FROM users u
 JOIN groups g ON g.name = 'administrators'
 JOIN tenants t ON g.tenant_id = t.id
 WHERE u.username = 'admin'
-AND t.slug = 'default-tenant'
+AND t.slug IN ('default-tenant', 'test-tenant-1', 'test-tenant-2')
 ON CONFLICT DO NOTHING;

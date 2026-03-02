@@ -1,0 +1,3749 @@
+===== FILE: ./safe/safe.go =====
+package safe
+
+import (
+	"opslense-pulse/shared"
+)
+
+func Go(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				shared.Error("goroutine panic recovered", "worker", name, "error", r)
+			}
+		}()
+		fn()
+	}()
+}
+
+===== FILE: ./metrics/memory.go =====
+package metrics
+
+import "github.com/shirou/gopsutil/v3/mem"
+
+func Memory() (uint64, uint64) {
+	m, err := mem.VirtualMemory()
+	if err != nil {
+		return 0, 0
+	}
+	return m.Total / 1024 / 1024, m.Used / 1024 / 1024
+}
+
+===== FILE: ./metrics/disk.go =====
+package metrics
+
+import (
+	"math"
+	"runtime"
+	"sync"
+
+	"opslense-pulse/shared"
+
+	"github.com/shirou/gopsutil/v3/disk"
+)
+
+const (
+	criticalThreshold = 90.0 // 90% usage
+	spikeThreshold    = 10.0 // 10% sudden jump
+)
+
+var (
+	prevDiskUsage = make(map[string]float64)
+	diskMu        sync.Mutex
+)
+
+func DiskUsageAll() []shared.DiskMetric {
+
+	partitions, err := disk.Partitions(false)
+	if err != nil {
+		return nil
+	}
+
+	var results []shared.DiskMetric
+
+	for _, p := range partitions {
+
+		// Skip pseudo filesystems (Linux)
+		if runtime.GOOS == "linux" {
+			if p.Fstype == "tmpfs" ||
+				p.Fstype == "devtmpfs" ||
+				p.Fstype == "overlay" {
+				continue
+			}
+		}
+
+		usage, err := disk.Usage(p.Mountpoint)
+		if err != nil {
+			continue
+		}
+		diskMu.Lock()
+		currentUsedPct := usage.UsedPercent
+		prevUsedPct := prevDiskUsage[p.Mountpoint]
+
+		// Critical detection
+		critical := currentUsedPct >= criticalThreshold
+
+		// Spike detection
+		spike := false
+		if prevUsedPct > 0 {
+			delta := math.Abs(currentUsedPct - prevUsedPct)
+			if delta >= spikeThreshold {
+				spike = true
+			}
+		}
+
+		// Save for next comparison
+		prevDiskUsage[p.Mountpoint] = currentUsedPct
+		diskMu.Unlock()
+		results = append(results, shared.DiskMetric{
+			MountPoint:    p.Mountpoint,
+			FSType:        p.Fstype,
+			TotalMB:       float32(usage.Total) / 1024 / 1024,
+			UsedMB:        float32(usage.Used) / 1024 / 1024,
+			UsedPct:       float32(currentUsedPct),
+			SpikeDetected: spike,
+			Critical:      critical,
+		})
+	}
+
+	return results
+}
+
+===== FILE: ./metrics/agent_health.go =====
+package metrics
+
+import (
+	"os"
+	"runtime"
+	"sync/atomic"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/process"
+)
+
+var (
+	startTime       = time.Now()
+	metricsFailures uint64
+	logFailures     uint64
+)
+
+type AgentHealth struct {
+	CPUPercent          float32 `json:"agent_cpu_percent"`
+	MemoryMB            float32 `json:"agent_mem_mb"`
+	Goroutines          int     `json:"agent_goroutines"`
+	UptimeSec           uint64  `json:"agent_uptime_sec"`
+	MetricsFailures     uint64  `json:"metrics_send_failures"`
+	LogFailures         uint64  `json:"logs_send_failures"`
+	QueueSizeBytes      int64   `json:"metrics_queue_bytes"`
+	LogQueueSizeBytes   int64   `json:"logs_queue_bytes"`
+	ConsecutiveFailures int32   `json:"consecutive_failures"`
+	LastSendSuccessUnix int64   `json:"last_send_success_unix"`
+	MetadataUpdates     uint64  `json:"metadata_updates"`
+}
+
+// Call this when metrics sending fails
+func IncMetricsFailure() {
+	atomic.AddUint64(&metricsFailures, 1)
+}
+
+// Call this when logs sending fails
+func IncLogFailure() {
+	atomic.AddUint64(&logFailures, 1)
+}
+
+func GetAgentHealth() AgentHealth {
+
+	p, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return AgentHealth{}
+	}
+
+	mem, _ := p.MemoryInfo()
+	cpu, _ := p.CPUPercent()
+
+	return AgentHealth{
+		CPUPercent:      float32(cpu),
+		MemoryMB:        float32(mem.RSS) / 1024 / 1024,
+		Goroutines:      runtime.NumGoroutine(),
+		UptimeSec:       uint64(time.Since(startTime).Seconds()),
+		MetricsFailures: atomic.LoadUint64(&metricsFailures),
+		LogFailures:     atomic.LoadUint64(&logFailures),
+	}
+}
+
+===== FILE: ./metrics/service_windows.go =====
+//go:build windows
+// +build windows
+
+package metrics
+
+import (
+	"opslense-pulse/shared"
+
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
+)
+
+var prevServiceState = make(map[string]bool)
+
+func GetServiceStatus(names []string) []shared.ServiceStatus {
+
+	var results []shared.ServiceStatus
+
+	m, err := mgr.Connect()
+	if err != nil {
+		return results
+	}
+	defer m.Disconnect()
+
+	for _, name := range names {
+
+		s, err := m.OpenService(name)
+
+		if err != nil {
+			results = append(results, shared.ServiceStatus{
+				Name:    name,
+				Running: false,
+				Enabled: false,
+				Status:  "down",
+			})
+			continue
+		}
+
+		status, err := s.Query()
+		cfg, _ := s.Config()
+
+		running := false
+		enabled := false
+
+		if err == nil {
+			running = status.State == svc.Running
+			enabled = cfg.StartType != mgr.StartDisabled
+		}
+
+		serviceStatus := "healthy"
+		if !enabled {
+			serviceStatus = "disabled"
+		} else if !running {
+			serviceStatus = "down"
+		}
+		previousRunning := prevServiceState[name]
+
+		crashDected := false
+
+		if previousRunning && !running && enabled {
+			crashDected = true
+		}
+
+		prevServiceState[name] = running
+		results = append(results, shared.ServiceStatus{
+			Name:          name,
+			Running:       running,
+			Enabled:       enabled,
+			Status:        serviceStatus,
+			CrashDetected: crashDected,
+		})
+
+		s.Close()
+	}
+
+	return results
+}
+
+===== FILE: ./metrics/service_linux.go =====
+//go:build linux
+
+package metrics
+
+import (
+	"opslense-pulse/shared"
+	"os/exec"
+	"strings"
+)
+
+var prevServiceState = make(map[string]bool)
+
+func GetServiceStatus(names []string) []shared.ServiceStatus {
+
+	var results []shared.ServiceStatus
+
+	for _, name := range names {
+
+		running, enabled := getLinuxServiceState(name)
+
+		status := "healthy"
+
+		if !enabled {
+			status = "disabled"
+		} else if !running {
+			status = "down"
+		}
+		previousRunning := prevServiceState[name]
+		crashDectected := false
+		if previousRunning && !running && enabled {
+			crashDectected = true
+		}
+		prevServiceState[name] = running
+
+		results = append(results, shared.ServiceStatus{
+			Name:          name,
+			Running:       running,
+			Enabled:       enabled,
+			Status:        status,
+			CrashDetected: crashDectected,
+		})
+	}
+
+	return results
+}
+
+func getLinuxServiceState(name string) (bool, bool) {
+	out, err := exec.Command(
+		"systemctl",
+		"show",
+		name,
+		"--property=ActiveState,UnitFileState",
+	).Output()
+
+	if err != nil {
+		return false, false
+	}
+
+	text := string(out)
+
+	running := strings.Contains(text, "ActiveState=active")
+	enabled := strings.Contains(text, "UnitFileState=enabled")
+
+	return running, enabled
+}
+
+===== FILE: ./metrics/cpu.go =====
+package metrics
+
+import (
+	"github.com/shirou/gopsutil/v3/cpu"
+)
+
+func CPUPercent() float64 {
+	p, err := cpu.Percent(0, false)
+	if err != nil || len(p) == 0 {
+		return 0
+	}
+	return p[0]
+}
+
+===== FILE: ./metrics/disk_io.go =====
+package metrics
+
+import (
+	"sync"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/disk"
+)
+
+type DiskIORate struct {
+	ReadBytesPerSec  float64
+	WriteBytesPerSec float64
+}
+
+var (
+	ioMu      sync.Mutex
+	prevRead  uint64
+	prevWrite uint64
+	prevTime  time.Time
+)
+
+func DiskIO() DiskIORate {
+	ioMu.Lock()
+	defer ioMu.Unlock()
+
+	stats, err := disk.IOCounters()
+	if err != nil {
+		return DiskIORate{}
+	}
+
+	var totalRead uint64
+	var totalWrite uint64
+
+	for _, v := range stats {
+		totalRead += v.ReadBytes
+		totalWrite += v.WriteBytes
+	}
+
+	now := time.Now()
+
+	if prevTime.IsZero() {
+		prevRead = totalRead
+		prevWrite = totalWrite
+		prevTime = now
+		return DiskIORate{}
+	}
+
+	elapsed := now.Sub(prevTime).Seconds()
+	if elapsed <= 0 {
+		return DiskIORate{}
+	}
+
+	readRate := float64(totalRead-prevRead) / elapsed
+	writeRate := float64(totalWrite-prevWrite) / elapsed
+
+	prevRead = totalRead
+	prevWrite = totalWrite
+	prevTime = now
+
+	return DiskIORate{
+		ReadBytesPerSec:  readRate,
+		WriteBytesPerSec: writeRate,
+	}
+}
+
+===== FILE: ./metrics/registry.go =====
+package metrics
+
+var plugins []MetricPlugin
+
+func Register(p MetricPlugin) {
+	plugins = append(plugins, p)
+}
+
+func CollectAll() map[string]interface{} {
+	out := make(map[string]interface{})
+
+	for _, p := range plugins {
+		data := p.Collect()
+		for k, v := range data {
+			out[k] = v
+		}
+	}
+
+	return out
+}
+
+===== FILE: ./metrics/host.go =====
+// agent/metrics/host.go
+package metrics
+
+import (
+	"github.com/shirou/gopsutil/v3/host"
+	"runtime"
+)
+
+func HostInfo() (string, uint64) {
+	h, err := host.Info()
+	if err != nil {
+		return runtime.GOOS, 0
+	}
+	return runtime.GOOS, h.Uptime
+}
+
+===== FILE: ./metrics/process.go =====
+package metrics
+
+import "github.com/shirou/gopsutil/v3/process"
+
+func ProcessStats() (int, int) {
+	procs, err := process.Processes()
+	if err != nil {
+		return 0, 0
+	}
+
+	total := len(procs)
+	running := 0
+
+	for _, p := range procs {
+		status, err := p.Status()
+		if err != nil {
+			continue
+		}
+		for _, s := range status {
+			if s == "R" {
+				running++
+				break
+			}
+		}
+	}
+
+	return total, running
+}
+
+===== FILE: ./metrics/network.go =====
+package metrics
+
+import (
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/net"
+)
+
+type InterfaceRate struct {
+	Name       string
+	SentPerSec float64
+	RecvPerSec float64
+}
+
+var (
+	netMu   sync.Mutex
+	prevNet = make(map[string]struct {
+		Sent uint64
+		Recv uint64
+		Time time.Time
+	})
+)
+
+func NetworkRates() []InterfaceRate {
+	netMu.Lock()
+	defer netMu.Unlock()
+
+	stats, err := net.IOCounters(true)
+	if err != nil {
+		return nil
+	}
+
+	now := time.Now()
+	var results []InterfaceRate
+
+	for _, s := range stats {
+
+		// Skip unwanted interfaces
+		if strings.HasPrefix(s.Name, "lo") ||
+			strings.HasPrefix(s.Name, "docker") ||
+			strings.HasPrefix(s.Name, "veth") ||
+			strings.HasPrefix(s.Name, "cni") {
+			continue
+		}
+
+		prev, exists := prevNet[s.Name]
+
+		if !exists {
+			prevNet[s.Name] = struct {
+				Sent uint64
+				Recv uint64
+				Time time.Time
+			}{s.BytesSent, s.BytesRecv, now}
+			continue
+		}
+
+		elapsed := now.Sub(prev.Time).Seconds()
+		if elapsed <= 0 {
+			continue
+		}
+
+		sentRate := float64(s.BytesSent-prev.Sent) / elapsed
+		recvRate := float64(s.BytesRecv-prev.Recv) / elapsed
+
+		results = append(results, InterfaceRate{
+			Name:       s.Name,
+			SentPerSec: sentRate,
+			RecvPerSec: recvRate,
+		})
+
+		prevNet[s.Name] = struct {
+			Sent uint64
+			Recv uint64
+			Time time.Time
+		}{s.BytesSent, s.BytesRecv, now}
+	}
+	// Cleanup removed interfaces
+	for name := range prevNet {
+		found := false
+		for _, s := range stats {
+			if s.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(prevNet, name)
+		}
+	}
+	return results
+}
+
+===== FILE: ./metrics/plugin.go =====
+package metrics
+
+type MetricPlugin interface {
+	Name() string
+	Collect() map[string]interface{}
+}
+
+===== FILE: ./metrics/anomaly.go =====
+package metrics
+
+import (
+	"math"
+	"sync"
+)
+
+const (
+	cpuCriticalThreshold = 95.0
+	cpuSpikeThreshold    = 30.0
+	memCriticalThreshold = 90.0
+	memPressureThreshold = 80.0
+)
+
+var (
+	prevCPU float64
+	cpuMu   sync.Mutex
+)
+
+type CPUAnomaly struct {
+	Critical bool
+	Spike    bool
+}
+
+type MemAnomaly struct {
+	Critical bool
+	Pressure bool
+}
+
+func DetectCPUAnomaly(current float64) CPUAnomaly {
+	cpuMu.Lock()
+	defer cpuMu.Unlock()
+
+	critical := current >= cpuCriticalThreshold
+
+	spike := false
+	if prevCPU > 0 {
+		if math.Abs(current-prevCPU) >= cpuSpikeThreshold {
+			spike = true
+		}
+	}
+
+	prevCPU = current
+
+	return CPUAnomaly{
+		Critical: critical,
+		Spike:    spike,
+	}
+}
+
+func DetectMemoryAnomaly(usedMB, totalMB uint64) MemAnomaly {
+
+	if totalMB == 0 {
+		return MemAnomaly{}
+	}
+
+	usedPercent := (float64(usedMB) / float64(totalMB)) * 100
+
+	return MemAnomaly{
+		Critical: usedPercent >= memCriticalThreshold,
+		Pressure: usedPercent >= memPressureThreshold,
+	}
+}
+
+===== FILE: ./metrics/service_stub.go =====
+//go:build !linux && !windows
+
+package metrics
+
+import (
+	"opslense-pulse/shared"
+)
+
+func GetServiceStatus(names []string) []shared.ServiceStatus {
+	return nil
+}
+
+===== FILE: ./metrics/load.go =====
+package metrics
+
+import (
+	"runtime"
+
+	"github.com/shirou/gopsutil/v3/load"
+)
+
+func LoadAverage() (float64, float64, float64) {
+	if runtime.GOOS == "windows" {
+		return 0, 0, 0
+	}
+
+	l, err := load.Avg()
+	if err != nil {
+		return 0, 0, 0
+	}
+
+	return l.Load1, l.Load5, l.Load15
+}
+
+===== FILE: ./identity/identity.go =====
+package identity
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"opslense-pulse/agent/collector"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+func LoadOrCreateAgentID() (string, error) {
+	path := filepath.Join(collector.StateDir, "agent-id")
+
+	// Check if the file exists
+	if data, err := os.ReadFile(path); err == nil {
+		return strings.TrimSpace(string(data)), nil
+	}
+
+	id := generateRandomID()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(id), 0600); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func generateRandomID() string {
+	b := make([]byte, 16) // 128-bit ID
+	_, err := rand.Read(b)
+	if err != nil {
+		panic("crypto rand failed")
+	}
+	return "agt_" + hex.EncodeToString(b)
+}
+
+===== FILE: ./retry/retry.go =====
+package retry
+
+import (
+	"fmt"
+	"time"
+)
+
+func Do(attempts int, baseDelay time.Duration, fn func() error) error {
+	delay := baseDelay
+
+	for i := 0; i < attempts; i++ {
+		if err := fn(); err != nil {
+			time.Sleep(delay)
+			delay *= 2
+		} else {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("all retries failed")
+}
+
+===== FILE: ./limiter/limiter.go =====
+package limiter
+
+import "golang.org/x/time/rate"
+
+var L = rate.NewLimiter(200, 500) // 200 events/sec
+
+func Allow() bool {
+	return L.Allow()
+}
+
+===== FILE: ./config/config.go =====
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+
+	"gopkg.in/yaml.v3"
+)
+
+type ServerConfig struct {
+	URL                string `yaml:"url"`
+	APIKey             string `yaml:"api_key"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+}
+
+type LogSource struct {
+	Name    string   `yaml:"name"`
+	Type    string   `yaml:"type"` // file | directory | journal | dmesg | windows-event
+	Path    string   `yaml:"path,omitempty"`
+	Include []string `yaml:"include,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty"`
+	Channel string   `yaml:"channel,omitempty"`
+}
+
+type AgentConfig struct {
+	IntervalSeconds              int         `yaml:"interval_seconds"`
+	SelfUpgrade                  bool        `yaml:"self_upgrade"`
+	Logs                         []LogSource `yaml:"logs"`
+	LogCollectionIntervalSeconds int         `yaml:"log_collection_interval_seconds"`
+	MonitoredServices            []string    `yaml:"monitored_services"`
+}
+
+type Config struct {
+	Version string            `yaml:"version"`
+	Server  ServerConfig      `yaml:"server"`
+	Agent   AgentConfig       `yaml:"agent"`
+	Tags    map[string]string `yaml:"tags"`
+}
+
+var DefaultPath string
+
+func init() {
+	if runtime.GOOS == "windows" {
+		DefaultPath = `C:\ProgramData\OpsLens-Pulse\agent-config.yaml`
+		return
+	}
+
+	if os.Geteuid() == 0 {
+		DefaultPath = "/etc/opslens-pulse/agent-config.yaml"
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		DefaultPath = "./agent-config.yaml"
+		return
+	}
+
+	DefaultPath = filepath.Join(home, ".opslens-pulse", "agent-config.yaml")
+}
+
+func LoadOrCreateConfig(path string) (Config, string, bool, error) {
+	var cfg Config
+
+	if env := os.Getenv("OPS_AGENT_CONFIG"); env != "" {
+		path = env
+	}
+	if path == "" {
+		path = DefaultPath
+	}
+
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		cfg = defaultConfig()
+		if err := save(path, cfg); err != nil {
+			return cfg, path, false, err
+		}
+		return cfg, path, true, nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return cfg, path, false, err
+	}
+	defer f.Close()
+
+	if err := yaml.NewDecoder(f).Decode(&cfg); err != nil {
+		return cfg, path, false, err
+	}
+
+	if cfg.Version == "" {
+		cfg.Version = "1"
+	}
+
+	return cfg, path, false, nil
+}
+
+func defaultConfig() Config {
+	return Config{
+		Version: "1",
+		Server: ServerConfig{
+			URL:    "http://localhost:9898",
+			APIKey: "",
+		},
+		Agent: AgentConfig{
+			IntervalSeconds:              5,
+			LogCollectionIntervalSeconds: 10,
+		},
+		Tags: map[string]string{
+			"env": "dev",
+		},
+	}
+}
+
+func save(path string, cfg Config) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := yaml.NewEncoder(f)
+	enc.SetIndent(2)
+	return enc.Encode(cfg)
+}
+
+===== FILE: ./config/validation.go =====
+package config
+
+import (
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+)
+
+func (c Config) Validate() error {
+
+	if c.Version != "" && c.Version != "1" {
+		return fmt.Errorf("unsupported config version: %s", c.Version)
+	}
+
+	// ---------------- Server ----------------
+
+	if c.Server.URL == "" {
+		return errors.New("server.url must be set")
+	}
+
+	parsed, err := url.Parse(c.Server.URL)
+	if err != nil {
+		return fmt.Errorf("invalid server.url: %v", err)
+	}
+
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("server.url must start with http:// or https://")
+	}
+
+	if parsed.Host == "" {
+		return errors.New("server.url must contain host")
+	}
+
+	if c.Server.APIKey == "" || len(c.Server.APIKey) < 16 {
+		return errors.New("server.api_key must be set and >= 16 characters")
+	}
+
+	// ---------------- Agent ----------------
+
+	if c.Agent.IntervalSeconds < 5 || c.Agent.IntervalSeconds > 3600 {
+		return errors.New("agent.interval_seconds must be between 5 and 3600")
+	}
+
+	if len(c.Agent.Logs) > 0 {
+
+		if c.Agent.LogCollectionIntervalSeconds < 5 ||
+			c.Agent.LogCollectionIntervalSeconds > 3600 {
+			return errors.New("agent.log_collection_interval_seconds must be between 5 and 3600")
+		}
+
+		seen := make(map[string]bool)
+
+		for i, src := range c.Agent.Logs {
+
+			if src.Name == "" {
+				return fmt.Errorf("agent.logs[%d].name is required", i)
+			}
+			if seen[src.Name] {
+				return fmt.Errorf("duplicate log source name: %s", src.Name)
+			}
+			seen[src.Name] = true
+
+			switch src.Type {
+
+			case "file":
+				if src.Path == "" {
+					return fmt.Errorf("agent.logs[%d].path is required for type=file", i)
+				}
+				if info, err := os.Stat(src.Path); err == nil && info.IsDir() {
+					return fmt.Errorf("agent.logs[%d].path must be a file", i)
+				}
+
+			case "directory":
+				if src.Path == "" {
+					return fmt.Errorf("agent.logs[%d].path is required for type=directory", i)
+				}
+				info, err := os.Stat(src.Path)
+				if err != nil || !info.IsDir() {
+					return fmt.Errorf("agent.logs[%d].path must be a valid directory", i)
+				}
+
+			case "journal", "dmesg":
+				if runtime.GOOS != "linux" {
+					return fmt.Errorf("%s supported only on Linux", src.Type)
+				}
+
+			case "windows-event":
+				if runtime.GOOS != "windows" {
+					return fmt.Errorf("windows-event supported only on Windows")
+				}
+				if src.Channel == "" {
+					return fmt.Errorf("agent.logs[%d].channel is required", i)
+				}
+
+			default:
+				return fmt.Errorf(
+					"agent.logs[%d].type must be file, directory, journal, dmesg, or windows-event",
+					i,
+				)
+			}
+		}
+
+		if err := validateLogSourcesAdvanced(c.Agent.Logs); err != nil {
+			return err
+		}
+	}
+
+	for k := range c.Tags {
+		if strings.TrimSpace(k) == "" {
+			return errors.New("tags cannot contain empty keys")
+		}
+	}
+
+	return nil
+}
+
+// ---------------- Advanced Validation ----------------
+
+func validateLogSourcesAdvanced(sources []LogSource) error {
+
+	absPaths := make(map[string]string)
+	var dirPaths []string
+
+	for _, src := range sources {
+
+		if src.Path == "" {
+			continue
+		}
+
+		abs, err := filepath.Abs(src.Path)
+		if err != nil {
+			continue
+		}
+
+		if prevType, exists := absPaths[abs]; exists {
+			return fmt.Errorf("duplicate log path detected: %s used for both %s and %s",
+				abs, prevType, src.Type)
+		}
+		absPaths[abs] = src.Type
+
+		if src.Type == "directory" {
+			dirPaths = append(dirPaths, abs)
+		}
+
+		for _, inc := range src.Include {
+			for _, exc := range src.Exclude {
+				if inc == exc {
+					return fmt.Errorf("conflicting include/exclude pattern '%s' in %s",
+						inc, abs)
+				}
+			}
+		}
+	}
+
+	for path, typ := range absPaths {
+		if typ != "file" {
+			continue
+		}
+		for _, dir := range dirPaths {
+			if isSubPath(dir, path) {
+				return fmt.Errorf("log source overlap: file %s inside directory %s",
+					path, dir)
+			}
+		}
+	}
+
+	for i := 0; i < len(dirPaths); i++ {
+		for j := i + 1; j < len(dirPaths); j++ {
+			if isSubPath(dirPaths[i], dirPaths[j]) ||
+				isSubPath(dirPaths[j], dirPaths[i]) {
+				return fmt.Errorf("nested directory log sources: %s and %s",
+					dirPaths[i], dirPaths[j])
+			}
+		}
+	}
+
+	return nil
+}
+
+func isSubPath(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, "..")
+}
+
+===== FILE: ./sender/http.go =====
+package sender
+
+import (
+	"bytes"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync/atomic"
+	"time"
+
+	"opslense-pulse/agent/internal"
+	"opslense-pulse/agent/metrics"
+	"opslense-pulse/shared"
+)
+
+var httpClient *http.Client
+var consecutiveFailures int32
+var agentVersion string
+
+func InitHTTPClient(skipVerify bool) {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: skipVerify,
+		},
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
+	httpClient = &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: tr,
+	}
+}
+
+func SetAgentVersion(v string) {
+	agentVersion = v
+}
+
+func handleFailure() {
+	internal.IncFailure()
+	n := atomic.AddInt32(&consecutiveFailures, 1)
+
+	if n > 5 {
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func handleSuccess() {
+	internal.ResetFailure()
+	atomic.StoreInt32(&consecutiveFailures, 0)
+}
+
+func SendRaw(serverURL, apiKey string, metricsPayload shared.HostMetrics) error {
+	body, err := json.Marshal(metricsPayload)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", serverURL+"/api/metrics", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Agent-Version", agentVersion)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		handleFailure()
+		metrics.IncMetricsFailure()
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		handleFailure()
+		metrics.IncMetricsFailure()
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	handleSuccess()
+	return nil
+}
+
+func SendHeartbeat(serverURL, apiKey string, hb shared.Heartbeat) error {
+	body, err := json.Marshal(hb)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", serverURL+"/api/heartbeat", bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Agent-Version", agentVersion)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		handleFailure()
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		handleFailure()
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	handleSuccess()
+	return nil
+}
+
+func SendContainerMetrics(serverURL, apiKey string, m shared.ContainerMetrics) error {
+
+	body, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		serverURL+"/api/container/metrics",
+		bytes.NewBuffer(body),
+	)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Agent-Version", agentVersion)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		handleFailure()
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		handleFailure()
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	handleSuccess()
+	return nil
+}
+
+func SendAgentRegistration(serverURL, apiKey string, a shared.AgentInfo) error {
+
+	body, _ := json.Marshal(a)
+
+	req, _ := http.NewRequest("POST",
+		fmt.Sprintf("%s/api/agents/register", serverURL),
+		bytes.NewBuffer(body),
+	)
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("registration failed")
+	}
+
+	return nil
+}
+
+===== FILE: ./sender/logs.go =====
+package sender
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"opslense-pulse/agent/metrics"
+	"opslense-pulse/shared"
+)
+
+// LogEntry represents a log entry
+type LogEntry struct {
+	AgentID   string            `json:"agent_id"`
+	Hostname  string            `json:"hostname"`
+	Timestamp int64             `json:"timestamp"`
+	Level     string            `json:"level"`
+	Message   string            `json:"message"`
+	Tags      map[string]string `json:"tags"`
+}
+
+type LogBatch struct {
+	AgentID  string     `json:"agent_id"`
+	Hostname string     `json:"hostname"`
+	Logs     []LogEntry `json:"logs"`
+}
+
+func SendLogs(serverURL, apiKey string, payload LogBatch) error {
+	shared.Info(
+		"send logs called",
+		"agent", payload.AgentID,
+		"host", payload.Hostname,
+		"count", len(payload.Logs),
+	)
+	body, error := json.Marshal(payload)
+
+	if error != nil {
+		return error
+	}
+	req, err := http.NewRequest("POST", serverURL+"/api/logs", bytes.NewBuffer(body))
+	if err != nil {
+		metrics.IncLogFailure()
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Agent-Version", agentVersion)
+
+	resp, err := httpClient.Do(req)
+	// fmt.Println("📤 POST /api/logs →", serverURL)
+	// fmt.Printf("📦 Payload size: %d logs\n", len(payload.Logs))
+	if err != nil {
+		metrics.IncLogFailure()
+		return err
+	}
+	defer resp.Body.Close()
+	//fmt.Println("📥 Response status:", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		metrics.IncLogFailure()
+		return fmt.Errorf("server returned status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+===== FILE: ./internal/telemetry.go =====
+package internal
+
+import (
+	"os"
+	"sync/atomic"
+	"time"
+)
+
+var (
+	consecutiveFailures int32
+	lastSuccessUnix     int64
+	metadataUpdates     uint64
+	startTimeUnix       int64
+	circuitOpenUntil    int64
+)
+
+func init() {
+	startTimeUnix = time.Now().Unix()
+}
+
+func IncFailure() {
+	atomic.AddInt32(&consecutiveFailures, 1)
+}
+
+func ResetFailure() {
+	atomic.StoreInt32(&consecutiveFailures, 0)
+	atomic.StoreInt64(&lastSuccessUnix, time.Now().Unix())
+}
+
+func GetFailures() int32 {
+	return atomic.LoadInt32(&consecutiveFailures)
+}
+
+func GetLastSuccess() int64 {
+	return atomic.LoadInt64(&lastSuccessUnix)
+}
+
+func IncMetadataUpdate() {
+	atomic.AddUint64(&metadataUpdates, 1)
+}
+
+func GetMetadataUpdates() uint64 {
+	return atomic.LoadUint64(&metadataUpdates)
+}
+
+func GetAgentStartTime() int64 {
+	return startTimeUnix
+}
+
+func FileSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+/* -----------------------------
+   Circuit Breaker
+--------------------------------*/
+
+func IsCircuitOpen() bool {
+	return time.Now().Unix() < atomic.LoadInt64(&circuitOpenUntil)
+}
+
+func OpenCircuit(d time.Duration) {
+	atomic.StoreInt64(&circuitOpenUntil, time.Now().Add(d).Unix())
+}
+
+===== FILE: ./collector/windows_stub.go =====
+//go:build !windows
+
+package collector
+
+import (
+	"context"
+	"opslense-pulse/agent/queue"
+)
+
+func StartWindowsEventCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	channel string,
+	logsQueue *queue.FileQueue,
+) {
+	// No-op on non-windows platforms
+}
+
+===== FILE: ./collector/windows_event.go =====
+//go:build windows
+
+package collector
+
+import (
+	"context"
+	"encoding/json"
+	"encoding/xml"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"opslense-pulse/agent/batcher"
+	"opslense-pulse/agent/limiter"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+type eventXML struct {
+	System struct {
+		Provider struct {
+			Name string `xml:"Name,attr"`
+		} `xml:"Provider"`
+		EventID       int   `xml:"EventID"`
+		Level         int   `xml:"Level"`
+		EventRecordID int64 `xml:"EventRecordID"`
+		TimeCreated   struct {
+			SystemTime string `xml:"SystemTime,attr"`
+		} `xml:"TimeCreated"`
+	} `xml:"System"`
+	EventData struct {
+		Data []string `xml:"Data"`
+	} `xml:"EventData"`
+}
+
+var (
+	cursorFile     = filepath.Join(StateDir, "windows_event_cursor.json")
+	cursorLock     = &sync.Mutex{}
+	channelCursors = make(map[string]int64)
+)
+
+func loadCursors() {
+	data, err := os.ReadFile(cursorFile)
+	if err != nil {
+		return
+	}
+	cursorLock.Lock()
+	defer cursorLock.Unlock()
+	_ = json.Unmarshal(data, &channelCursors)
+}
+
+func saveCursors() {
+	cursorLock.Lock()
+	defer cursorLock.Unlock()
+
+	data, err := json.Marshal(channelCursors)
+	if err != nil {
+		return
+	}
+
+	tmp := cursorFile + ".tmp"
+	_ = os.WriteFile(tmp, data, 0600)
+	_ = os.Rename(tmp, cursorFile)
+}
+
+func StartWindowsEventCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	srcChannel string,
+	logsQueue *queue.FileQueue,
+) {
+
+	shared.Info("windows event collector started", "channel", srcChannel)
+
+	loadCursors()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	logBatcher := batcher.New(200, 1*time.Second)
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			saveCursors()
+			return
+
+		case <-ticker.C:
+
+			cursorLock.Lock()
+			lastID := channelCursors[srcChannel]
+			cursorLock.Unlock()
+
+			query := "*[System[(EventRecordID > " + strconv.FormatInt(lastID, 10) + ")]]"
+			execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(
+				execCtx,
+				"wevtutil",
+				"qe",
+				srcChannel,
+				"/q:"+query,
+				"/f:xml",
+			)
+			out, err := cmd.Output()
+			if err != nil || len(out) == 0 {
+				continue
+			}
+
+			events := splitXML(string(out))
+
+			for _, e := range events {
+
+				if !limiter.Allow() {
+					continue
+				}
+
+				var parsed eventXML
+				if err := xml.Unmarshal([]byte(e), &parsed); err != nil {
+					continue
+				}
+
+				level := mapLevel(parsed.System.Level)
+
+				message := strings.Join(parsed.EventData.Data, " | ")
+
+				entry := sender.LogEntry{
+					AgentID:   agentID,
+					Hostname:  hostname,
+					Timestamp: time.Now().Unix(),
+					Level:     level,
+					Message:   message,
+					Tags: map[string]string{
+						"type":     "windows-event",
+						"channel":  srcChannel,
+						"provider": parsed.System.Provider.Name,
+						"event_id": strconv.Itoa(parsed.System.EventID),
+					},
+				}
+
+				outBatch := logBatcher.Add(entry)
+
+				if outBatch != nil {
+					var entries []sender.LogEntry
+					for _, ev := range outBatch {
+						entries = append(entries, ev.(sender.LogEntry))
+					}
+
+					batch := sender.LogBatch{
+						AgentID:  agentID,
+						Hostname: hostname,
+						Logs:     entries,
+					}
+
+					_ = logsQueue.Enqueue(batch)
+				}
+
+				cursorLock.Lock()
+				channelCursors[srcChannel] = parsed.System.EventRecordID
+				cursorLock.Unlock()
+			}
+
+			saveCursors()
+		}
+	}
+}
+
+func splitXML(input string) []string {
+	parts := strings.Split(input, "<Event ")
+	var events []string
+
+	for _, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		events = append(events, "<Event "+p)
+	}
+
+	return events
+}
+
+func mapLevel(level int) string {
+	switch level {
+	case 1:
+		return "critical"
+	case 2:
+		return "error"
+	case 3:
+		return "warn"
+	case 4:
+		return "info"
+	case 5:
+		return "debug"
+	default:
+		return "info"
+	}
+}
+
+===== FILE: ./collector/container_metrics.go =====
+package collector
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/retry"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+var (
+	lastMetrics     = make(map[string]time.Time)
+	lastMetricsFile = filepath.Join(StateDir, "container_metrics.json")
+	lastMetricsLock = &sync.Mutex{}
+	metricsDirty    = false
+	flushInterval   = 30 * time.Second
+)
+
+func loadLastMetrics() {
+	data, err := os.ReadFile(lastMetricsFile)
+	if err != nil {
+		return
+	}
+	lastMetricsLock.Lock()
+	defer lastMetricsLock.Unlock()
+	_ = json.Unmarshal(data, &lastMetrics)
+}
+
+func saveLastMetrics() {
+	lastMetricsLock.Lock()
+	defer lastMetricsLock.Unlock()
+
+	if !metricsDirty {
+		return
+	}
+
+	data, err := json.Marshal(lastMetrics)
+	if err != nil {
+		shared.Error("container metrics marshal failed", "error", err.Error())
+		return
+	}
+
+	tmp := lastMetricsFile + ".tmp"
+
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		shared.Error("container metrics temp write failed", "error", err.Error())
+		return
+	}
+
+	if err := os.Rename(tmp, lastMetricsFile); err != nil {
+		shared.Error("container metrics rename failed", "error", err.Error())
+		return
+	}
+
+	metricsDirty = false
+}
+
+func periodicMetricsFlush(ctx context.Context) {
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			saveLastMetrics()
+			return
+		case <-ticker.C:
+			saveLastMetrics()
+		}
+	}
+}
+
+func StartContainerMetricsCollector(
+	ctx context.Context,
+	agentID, hostname, serverURL, apiKey string,
+	intervalSeconds int,
+) {
+
+	shared.Info("container metrics collector started")
+
+	loadLastMetrics()
+	go periodicMetricsFlush(ctx)
+
+	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			saveLastMetrics()
+			shared.Info("container metrics collector stopped")
+			return
+
+		case <-ticker.C:
+
+			list, err := containers.ListRunning(ctx)
+			if err != nil {
+				continue
+			}
+
+			for _, c := range list {
+
+				raw, err := containers.GetContainerMetrics(ctx, c)
+				if err != nil {
+					continue
+				}
+
+				lastMetricsLock.Lock()
+				lastSent := lastMetrics[c.ID]
+				lastMetricsLock.Unlock()
+
+				if !lastSent.IsZero() && !raw.Timestamp.After(lastSent) {
+					continue
+				}
+
+				metric := containers.ToSharedMetrics(raw, agentID, hostname)
+
+				if err := retry.Do(3, 2*time.Second, func() error {
+					return sender.SendContainerMetrics(serverURL, apiKey, metric)
+				}); err != nil {
+					shared.Error("container metrics send failed", "error", err.Error())
+					continue
+				}
+
+				lastMetricsLock.Lock()
+				lastMetrics[c.ID] = raw.Timestamp
+				metricsDirty = true
+				lastMetricsLock.Unlock()
+			}
+		}
+	}
+}
+
+===== FILE: ./collector/journal_linux.go =====
+//go:build linux
+
+package collector
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"opslense-pulse/agent/batcher"
+	"opslense-pulse/agent/limiter"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+var (
+	journalCursorFile = filepath.Join(StateDir, "journal_cursor")
+	journalCursor     string
+	journalCursorLock = &sync.Mutex{}
+)
+
+func loadJournalCursor() {
+	data, err := os.ReadFile(journalCursorFile)
+	if err != nil {
+		return
+	}
+	journalCursorLock.Lock()
+	journalCursor = string(data)
+	journalCursorLock.Unlock()
+}
+
+func saveJournalCursor(cursor string) {
+	journalCursorLock.Lock()
+	defer journalCursorLock.Unlock()
+
+	journalCursor = cursor
+
+	tmp := journalCursorFile + ".tmp"
+	_ = os.WriteFile(tmp, []byte(cursor), 0600)
+	_ = os.Rename(tmp, journalCursorFile)
+}
+
+func StartJournalCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
+) {
+
+	shared.Info("journalctl collector started")
+
+	loadJournalCursor()
+
+	logBatcher := batcher.New(200, 1*time.Second)
+
+	args := []string{
+		"-f",
+		"-o", "json",
+	}
+
+	if journalCursor != "" {
+		args = append(args, "--after-cursor", journalCursor)
+	} else {
+		args = append(args, "-n", "0")
+	}
+
+	cmd := exec.CommandContext(ctx, "journalctl", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		shared.Error("journal stdout pipe failed", "error", err.Error())
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		shared.Error("journalctl start failed", "error", err.Error())
+		return
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+
+		select {
+		case <-ctx.Done():
+			cmd.Process.Kill()
+			return
+		default:
+		}
+
+		if !limiter.Allow() {
+			continue
+		}
+
+		line := scanner.Bytes()
+
+		var obj map[string]interface{}
+		if err := json.Unmarshal(line, &obj); err != nil {
+			continue
+		}
+
+		msg, _ := obj["MESSAGE"].(string)
+		cursor, _ := obj["__CURSOR"].(string)
+
+		if msg == "" {
+			continue
+		}
+
+		logEntry := sender.LogEntry{
+			AgentID:   agentID,
+			Hostname:  hostname,
+			Timestamp: time.Now().Unix(),
+			Level:     ExtractLevel(msg),
+			Message:   msg,
+			Tags: map[string]string{
+				"type": "journal",
+			},
+		}
+
+		out := logBatcher.Add(logEntry)
+
+		if out != nil {
+			var entries []sender.LogEntry
+			for _, e := range out {
+				entries = append(entries, e.(sender.LogEntry))
+			}
+
+			batch := sender.LogBatch{
+				AgentID:  agentID,
+				Hostname: hostname,
+				Logs:     entries,
+			}
+
+			_ = logsQueue.Enqueue(batch)
+		}
+
+		if cursor != "" {
+			saveJournalCursor(cursor)
+		}
+	}
+
+	_ = cmd.Wait()
+}
+
+===== FILE: ./collector/level.go =====
+package collector
+
+import (
+	"encoding/json"
+	"strings"
+)
+
+func ExtractLevel(line string) string {
+
+	// 1️⃣ JSON structured logs
+	if strings.Contains(line, "\"level\"") {
+		var obj map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &obj); err == nil {
+			if lvl, ok := obj["level"].(string); ok {
+				return normalizeLevel(lvl)
+			}
+		}
+	}
+
+	// 2️⃣ Plain text logs (timestamp LEVEL message)
+	fields := strings.Fields(line)
+	if len(fields) >= 3 {
+		return normalizeLevel(fields[2])
+	}
+
+	// 3️⃣ Keyword inference
+	lower := strings.ToLower(line)
+
+	if strings.Contains(lower, "panic") ||
+		strings.Contains(lower, "fatal") ||
+		strings.Contains(lower, "critical") {
+		return "critical"
+	}
+
+	if strings.Contains(lower, "error") ||
+		strings.Contains(lower, "failed") ||
+		strings.Contains(lower, "exception") {
+		return "error"
+	}
+
+	if strings.Contains(lower, "warn") {
+		return "warn"
+	}
+
+	return "info"
+}
+
+func normalizeLevel(lvl string) string {
+	l := strings.ToLower(lvl)
+
+	switch l {
+	case "info":
+		return "info"
+	case "warn", "warning":
+		return "warn"
+	case "error":
+		return "error"
+	case "critical", "fatal", "panic":
+		return "critical"
+	case "debug":
+		return "debug"
+	default:
+		return "info"
+	}
+}
+
+===== FILE: ./collector/host_logs.go =====
+package collector
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"opslense-pulse/agent/batcher"
+	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/limiter"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+
+	"github.com/nxadm/tail"
+)
+
+func startFileCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	src config.LogSource,
+	logsQueue *queue.FileQueue,
+) {
+
+	shared.Info("Tail log collector started", "path", src.Path)
+
+	t, err := tail.TailFile(src.Path, tail.Config{
+		Follow:    true,
+		ReOpen:    true,
+		MustExist: false,
+		Poll:      true,
+	})
+	if err != nil {
+		shared.Error("Tail error", "error", err.Error())
+		return
+	}
+
+	// ✅ Batcher (200 logs OR 1 second flush)
+	logBatcher := batcher.New(200, 1*time.Second)
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			t.Cleanup()
+			return
+
+		case line := <-t.Lines:
+			if line == nil {
+				continue
+			}
+			if !limiter.Allow() {
+				continue
+			}
+
+			level := ExtractLevel(line.Text)
+
+			entry := sender.LogEntry{
+				AgentID:   agentID,
+				Hostname:  hostname,
+				Timestamp: time.Now().Unix(),
+				Level:     level,
+				Message:   strings.TrimSpace(line.Text),
+				Tags: map[string]string{
+					"source": src.Name,
+					"type":   "file",
+				},
+			}
+
+			out := logBatcher.Add(entry)
+
+			if out != nil {
+				var entries []sender.LogEntry
+				for _, e := range out {
+					entries = append(entries, e.(sender.LogEntry))
+				}
+
+				batch := sender.LogBatch{
+					AgentID:  agentID,
+					Hostname: hostname,
+					Logs:     entries,
+				}
+
+				_ = logsQueue.Enqueue(batch)
+			}
+
+		}
+	}
+}
+
+===== FILE: ./collector/journal_stub.go =====
+//go:build !linux
+
+package collector
+
+import (
+	"context"
+	"opslense-pulse/agent/queue"
+)
+
+func StartJournalCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
+) {
+}
+
+===== FILE: ./collector/log_source.go =====
+package collector
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"opslense-pulse/agent/batcher"
+	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/limiter"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+func StartLogSource(
+	ctx context.Context,
+	agentID, hostname string,
+	src config.LogSource,
+	logsQueue *queue.FileQueue,
+) {
+
+	shared.Info("starting log source", "name", src.Name, "type", src.Type)
+
+	switch src.Type {
+
+	case "file":
+		go startFileCollector(ctx, agentID, hostname, src, logsQueue)
+
+	case "directory":
+		go startDirectoryCollector(ctx, agentID, hostname, src, logsQueue)
+
+	case "journal":
+		go StartJournalCollector(ctx, agentID, hostname, logsQueue)
+
+	case "dmesg":
+		go startDmesgMode(ctx, agentID, hostname, logsQueue)
+
+	case "windows-event":
+		if runtime.GOOS == "windows" {
+			go StartWindowsEventCollector(
+				ctx,
+				agentID,
+				hostname,
+				src.Channel,
+				logsQueue,
+			)
+		}
+
+	default:
+		shared.Warn("Unsupported log source type", "type", src.Type)
+	}
+}
+
+func startDirectoryCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	src config.LogSource,
+	logsQueue *queue.FileQueue,
+) {
+
+	shared.Info("directory collector started", "path", src.Path)
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	running := make(map[string]bool)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+			files, err := os.ReadDir(src.Path)
+			if err != nil {
+				continue
+			}
+
+			for _, entry := range files {
+
+				if entry.IsDir() {
+					continue
+				}
+
+				fileName := entry.Name()
+				fullPath := filepath.Join(src.Path, fileName)
+
+				if !matchesInclude(fileName, src.Include) {
+					continue
+				}
+
+				if matchesExclude(fileName, src.Exclude) {
+					continue
+				}
+
+				if running[fullPath] {
+					continue
+				}
+
+				fileSrc := src
+				fileSrc.Path = fullPath
+				fileSrc.Name = src.Name + ":" + fileName
+
+				running[fullPath] = true
+
+				go startFileCollector(ctx, agentID, hostname, fileSrc, logsQueue)
+			}
+		}
+	}
+}
+
+/* =========================
+   SECURE MODES BELOW
+   ========================= */
+
+func startDmesgMode(
+	ctx context.Context,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
+) {
+	if runtime.GOOS != "linux" {
+		return
+	}
+
+	executeAndSend(ctx, agentID, hostname, logsQueue, "dmesg")
+}
+
+func startDockerLogsMode(
+	ctx context.Context,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
+) {
+	executeAndSend(ctx, agentID, hostname, logsQueue, "docker", "logs", "--tail", "100")
+}
+
+/* =========================
+   SAFE EXECUTION CORE
+   ========================= */
+
+func executeAndSend(
+	ctx context.Context,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
+	name string,
+	args ...string,
+) {
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	logBatcher := batcher.New(200, 1*time.Second)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+
+			// 5 second execution timeout
+			execCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+
+			cmd := exec.CommandContext(execCtx, name, args...)
+			out, err := cmd.Output()
+			cancel()
+
+			if err != nil {
+				continue
+			}
+
+			lines := splitLines(string(out))
+			if len(lines) == 0 {
+				continue
+			}
+
+			for _, l := range lines {
+
+				if !limiter.Allow() {
+					continue
+				}
+
+				entry := sender.LogEntry{
+					AgentID:   agentID,
+					Hostname:  hostname,
+					Timestamp: time.Now().Unix(),
+					Level:     ExtractLevel(l),
+					Message:   l,
+					Tags: map[string]string{
+						"type": name,
+					},
+				}
+
+				outBatch := logBatcher.Add(entry)
+
+				if outBatch != nil {
+					var entries []sender.LogEntry
+					for _, e := range outBatch {
+						entries = append(entries, e.(sender.LogEntry))
+					}
+
+					batch := sender.LogBatch{
+						AgentID:  agentID,
+						Hostname: hostname,
+						Logs:     entries,
+					}
+
+					_ = logsQueue.Enqueue(batch)
+				}
+			}
+		}
+	}
+}
+
+/* ========================= */
+
+func splitLines(content string) []string {
+	var out []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func matchesInclude(fileName string, patterns []string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, p := range patterns {
+		matched, _ := filepath.Match(p, fileName)
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func matchesExclude(fileName string, patterns []string) bool {
+	for _, p := range patterns {
+		matched, _ := filepath.Match(p, fileName)
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+===== FILE: ./collector/base.go =====
+package collector
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+)
+
+var BaseDir string
+var QueueDir string
+var StateDir string
+var LogDir string
+
+func init() {
+
+	if runtime.GOOS == "windows" {
+		BaseDir = `C:\ProgramData\OpsLens-Pulse`
+	} else {
+
+		// Root user → system location
+		if os.Geteuid() == 0 {
+			BaseDir = "/var/lib/opslens-pulse"
+		} else {
+			// Non-root → user home
+			home, err := os.UserHomeDir()
+			if err != nil {
+				BaseDir = "./.opslens-pulse"
+			} else {
+				BaseDir = filepath.Join(home, ".opslens-pulse")
+			}
+		}
+	}
+
+	QueueDir = filepath.Join(BaseDir, "queue")
+	StateDir = filepath.Join(BaseDir, "state")
+	LogDir = filepath.Join(BaseDir, "logs")
+
+	// Ensure directories exist
+	_ = os.MkdirAll(QueueDir, 0700)
+	_ = os.MkdirAll(StateDir, 0700)
+	_ = os.MkdirAll(LogDir, 0700)
+}
+
+===== FILE: ./collector/container_logs.go =====
+package collector
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/limiter"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/shared"
+)
+
+var (
+	containerLastTime     = make(map[string]int64)
+	containerLastLineFile = filepath.Join(StateDir, "container_last_time.json")
+	containerLastLineLock = &sync.Mutex{}
+	logsDirty             = false
+	logsFlushEvery        = 30 * time.Second
+)
+
+func loadLastLines() {
+	data, err := os.ReadFile(containerLastLineFile)
+	if err != nil {
+		return
+	}
+	containerLastLineLock.Lock()
+	defer containerLastLineLock.Unlock()
+	_ = json.Unmarshal(data, &containerLastTime)
+}
+
+func saveLastLines() {
+	containerLastLineLock.Lock()
+	defer containerLastLineLock.Unlock()
+
+	if !logsDirty {
+		return
+	}
+
+	data, err := json.Marshal(containerLastTime)
+	if err != nil {
+		shared.Error("container log cursor marshal failed", "error", err.Error())
+		return
+	}
+
+	tmp := containerLastLineFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		shared.Error("container log cursor temp write failed", "error", err.Error())
+		return
+	}
+
+	if err := os.Rename(tmp, containerLastLineFile); err != nil {
+		shared.Error("container log cursor rename failed", "error", err.Error())
+		return
+	}
+
+	logsDirty = false
+}
+
+func periodicLogsFlush(ctx context.Context) {
+	ticker := time.NewTicker(logsFlushEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			saveLastLines()
+			return
+		case <-ticker.C:
+			saveLastLines()
+		}
+	}
+}
+
+func StartContainerLogsCollector(
+	ctx context.Context,
+	agentID, hostname string,
+	logsQueue *queue.FileQueue,
+	intervalSeconds int,
+) {
+
+	shared.Info("container logs collector started")
+
+	loadLastLines()
+	go periodicLogsFlush(ctx)
+
+	ticker := time.NewTicker(time.Duration(intervalSeconds) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			saveLastLines()
+			shared.Info("container logs collector stopped")
+			return
+
+		case <-ticker.C:
+
+			list, err := containers.ListRunning(ctx)
+			if err != nil {
+				shared.Error("list containers failed", "error", err.Error())
+				continue
+			}
+
+			for _, c := range list {
+
+				containerLastLineLock.Lock()
+				last := containerLastTime[c.ID]
+				containerLastLineLock.Unlock()
+
+				lines, err := containers.GetContainerLogsSince(ctx, c.ID, last)
+				if err != nil || len(lines) == 0 {
+					continue
+				}
+
+				name := ""
+				if len(c.Names) > 0 {
+					name = strings.TrimPrefix(c.Names[0], "/")
+				}
+
+				var entries []shared.ContainerLog
+
+				for _, line := range lines {
+
+					if !limiter.Allow() {
+						continue
+					}
+
+					level := ExtractLevel(line)
+
+					entries = append(entries, shared.ContainerLog{
+						AgentID:       agentID,
+						Hostname:      hostname,
+						ContainerID:   c.ID,
+						ContainerName: name,
+						Timestamp:     time.Now().Unix(),
+						Message:       line,
+						Level:         level,
+					})
+				}
+
+				if len(entries) == 0 {
+					continue
+				}
+
+				batch := shared.ContainerLogBatch{
+					AgentID:  agentID,
+					Hostname: hostname,
+					Logs:     entries,
+				}
+
+				// ✅ Enqueue instead of direct send
+				if err := logsQueue.Enqueue(batch); err != nil {
+					shared.Error("enqueue container logs failed", "error", err.Error())
+					continue
+				}
+
+				// Update cursor only after successful enqueue
+				containerLastLineLock.Lock()
+				containerLastTime[c.ID] = time.Now().Unix()
+				logsDirty = true
+				containerLastLineLock.Unlock()
+			}
+		}
+	}
+}
+
+===== FILE: ./heartbeat/heartbeat.go =====
+package heartbeat
+
+import (
+	"time"
+
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+type Heartbeat struct {
+	AgentID   string    `json:"agent_id"`
+	Hostname  string    `json:"hostname"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// Send sends a heartbeat to server
+func Send(serverURL, token, agentID, hostname string) error {
+	hb := shared.Heartbeat{
+		AgentID:   agentID,
+		Hostname:  hostname,
+		Timestamp: time.Now().Unix(),
+	}
+
+	return sender.SendHeartbeat(serverURL, token, hb)
+}
+
+===== FILE: ./logs/logs.go =====
+package logs
+
+import (
+	"bufio"
+	"os"
+	"strings"
+)
+
+func ReadLastLines(path string, n int) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	var lines []string
+
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n"), scanner.Err()
+}
+
+===== FILE: ./queue/file_queue.go =====
+package queue
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"opslense-pulse/shared"
+	"os"
+	"path/filepath"
+	"sync"
+
+	"github.com/shirou/gopsutil/v3/disk"
+)
+
+const maxQueueSize = 500 * 1024 * 1024 // 500MB
+const minFreeDiskPercent = 5.0         // 5% minimum free disk
+
+func hasEnoughDiskSpace(path string) bool {
+	usage, err := disk.Usage(filepath.Dir(path))
+	if err != nil {
+		return true // fail open (avoid blocking agent)
+	}
+
+	freePercent := 100.0 - usage.UsedPercent
+	return freePercent > minFreeDiskPercent
+}
+
+type FileQueue struct {
+	path string
+	mu   sync.Mutex
+}
+
+func New(path string) *FileQueue {
+	// 🔐 Use secure permissions
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
+	return &FileQueue{path: path}
+}
+
+func (q *FileQueue) Enqueue(v interface{}) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	// Disk free protection
+	if !hasEnoughDiskSpace(q.path) {
+		shared.Error("low disk space - queue write blocked", "path", q.path)
+		return fmt.Errorf("low disk space")
+	}
+
+	// Check current queue size BEFORE writing
+	info, err := os.Stat(q.path)
+	if err == nil {
+		if info.Size() > maxQueueSize {
+			shared.Error("queue size limit exceeded", "path", q.path)
+			return fmt.Errorf("queue size limit exceeded")
+		}
+	}
+
+	f, err := os.OpenFile(q.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	_, err = f.Write(append(data, '\n'))
+	return err
+}
+
+func (q *FileQueue) DequeueAll() ([]json.RawMessage, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	f, err := os.Open(q.path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var msgs []json.RawMessage
+
+	scanner := bufio.NewScanner(f)
+
+	// ✅ 10MB buffer to avoid token overflow
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		msgs = append(msgs, json.RawMessage(scanner.Bytes()))
+	}
+
+	return msgs, scanner.Err()
+}
+
+func (q *FileQueue) Clear() error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return os.Truncate(q.path, 0)
+}
+
+===== FILE: ./queue/sender_worker.go =====
+package queue
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"os"
+	"time"
+
+	"opslense-pulse/agent/internal"
+	"opslense-pulse/agent/retry"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+func StartMetricsSender(ctx context.Context, q *FileQueue, serverURL, apiKey string) {
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+
+			q.mu.Lock()
+
+			file, err := os.Open(q.path)
+			if err != nil {
+				q.mu.Unlock()
+				continue
+			}
+
+			tmpPath := q.path + ".tmp"
+			tmpFile, err := os.Create(tmpPath)
+			if err != nil {
+				file.Close()
+				q.mu.Unlock()
+				continue
+			}
+
+			scanner := bufio.NewScanner(file)
+			scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+
+			for scanner.Scan() {
+
+				line := scanner.Bytes()
+
+				var m shared.HostMetrics
+				if err := json.Unmarshal(line, &m); err != nil {
+					continue
+				}
+
+				// Circuit open → just rewrite
+				if internal.IsCircuitOpen() {
+					tmpFile.Write(line)
+					tmpFile.Write([]byte("\n"))
+					continue
+				}
+
+				err := retry.Do(3, 2*time.Second, func() error {
+					return sender.SendRaw(serverURL, apiKey, m)
+				})
+
+				if err != nil {
+
+					internal.IncFailure()
+
+					if internal.GetFailures() > 10 {
+						internal.OpenCircuit(30 * time.Second)
+					}
+
+					tmpFile.Write(line)
+					tmpFile.Write([]byte("\n"))
+
+				} else {
+					internal.ResetFailure()
+				}
+			}
+
+			file.Close()
+			tmpFile.Close()
+
+			os.Rename(tmpPath, q.path)
+
+			q.mu.Unlock()
+		}
+	}
+}
+
+===== FILE: ./queue/log_sender_worker.go =====
+package queue
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"os"
+	"time"
+
+	"opslense-pulse/agent/internal"
+	"opslense-pulse/agent/retry"
+	"opslense-pulse/agent/sender"
+)
+
+func StartLogsSender(ctx context.Context, q *FileQueue, serverURL, apiKey string) {
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			return
+
+		case <-ticker.C:
+
+			q.mu.Lock()
+
+			file, err := os.Open(q.path)
+			if err != nil {
+				q.mu.Unlock()
+				continue
+			}
+
+			tmpPath := q.path + ".tmp"
+			tmpFile, err := os.Create(tmpPath)
+			if err != nil {
+				file.Close()
+				q.mu.Unlock()
+				continue
+			}
+
+			scanner := bufio.NewScanner(file)
+			scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+
+			for scanner.Scan() {
+
+				line := scanner.Bytes()
+
+				var batch sender.LogBatch
+				if err := json.Unmarshal(line, &batch); err != nil {
+					continue
+				}
+
+				if internal.IsCircuitOpen() {
+					tmpFile.Write(line)
+					tmpFile.Write([]byte("\n"))
+					continue
+				}
+
+				err := retry.Do(3, 2*time.Second, func() error {
+					return sender.SendLogs(serverURL, apiKey, batch)
+				})
+
+				if err != nil {
+
+					internal.IncFailure()
+
+					if internal.GetFailures() > 10 {
+						internal.OpenCircuit(30 * time.Second)
+					}
+
+					tmpFile.Write(line)
+					tmpFile.Write([]byte("\n"))
+
+				} else {
+					internal.ResetFailure()
+				}
+			}
+
+			file.Close()
+			tmpFile.Close()
+
+			os.Rename(tmpPath, q.path)
+
+			q.mu.Unlock()
+		}
+	}
+}
+
+===== FILE: ./containers/docker.go =====
+package containers
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/client"
+)
+
+type RawContainerMetrics struct {
+	ID         string
+	Name       string
+	Image      string
+	Status     string
+	CPU        float64
+	MemUsedMB  uint64
+	MemLimitMB uint64
+	Timestamp  time.Time
+}
+
+var dockerClient *client.Client
+
+func init() {
+	var err error
+
+	dockerClient, err = client.NewClientWithOpts(
+		client.FromEnv,
+		client.WithAPIVersionNegotiation(),
+	)
+
+	if err != nil {
+		dockerClient = nil
+	}
+}
+
+func ListRunning(ctx context.Context) ([]types.Container, error) {
+	if dockerClient == nil {
+		return nil, fmt.Errorf("docker client not initialized")
+	}
+
+	return dockerClient.ContainerList(ctx, types.ContainerListOptions{})
+}
+
+func GetContainerMetrics(ctx context.Context, c types.Container) (RawContainerMetrics, error) {
+	if dockerClient == nil {
+		return RawContainerMetrics{}, fmt.Errorf("docker client not initialized")
+	}
+
+	stats, err := dockerClient.ContainerStatsOneShot(ctx, c.ID)
+	if err != nil {
+		return RawContainerMetrics{}, err
+	}
+	defer stats.Body.Close()
+
+	var s types.StatsJSON
+	if err := json.NewDecoder(stats.Body).Decode(&s); err != nil {
+		return RawContainerMetrics{}, err
+	}
+
+	cpuDelta := float64(
+		s.CPUStats.CPUUsage.TotalUsage -
+			s.PreCPUStats.CPUUsage.TotalUsage,
+	)
+
+	sysDelta := float64(
+		s.CPUStats.SystemUsage -
+			s.PreCPUStats.SystemUsage,
+	)
+
+	cpuPercent := 0.0
+	if cpuDelta > 0 && sysDelta > 0 {
+		cpuPercent = (cpuDelta / sysDelta) *
+			float64(len(s.CPUStats.CPUUsage.PercpuUsage)) * 100
+	}
+
+	name := ""
+	if len(c.Names) > 0 {
+		name = strings.TrimPrefix(c.Names[0], "/")
+	}
+
+	return RawContainerMetrics{
+		ID:         c.ID,
+		Name:       name,
+		Image:      c.Image,
+		Status:     c.State,
+		CPU:        cpuPercent,
+		MemUsedMB:  s.MemoryStats.Usage / 1024 / 1024,
+		MemLimitMB: s.MemoryStats.Limit / 1024 / 1024,
+		Timestamp:  time.Now(),
+	}, nil
+}
+
+func GetContainerLogsSince(ctx context.Context, containerID string, since int64) ([]string, error) {
+	if dockerClient == nil {
+		return nil, fmt.Errorf("docker client not initialized")
+	}
+
+	options := types.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+		Since:      fmt.Sprintf("%d", since),
+	}
+
+	reader, err := dockerClient.ContainerLogs(ctx, containerID, options)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	limited := io.LimitReader(reader, 5*1024*1024)
+	data, err := io.ReadAll(limited)
+
+	if err != nil || len(data) == 0 {
+		return nil, err
+	}
+
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n"), nil
+}
+
+func Shutdown() {
+	if dockerClient != nil {
+		dockerClient.Close()
+	}
+}
+
+===== FILE: ./containers/convert.go =====
+package containers
+
+import (
+	"opslense-pulse/shared"
+)
+
+func ToSharedMetrics(
+	raw RawContainerMetrics,
+	agentID, hostname string,
+) shared.ContainerMetrics {
+
+	return shared.ContainerMetrics{
+		AgentID:       agentID,
+		Hostname:      hostname,
+		ContainerID:   raw.ID,
+		ContainerName: raw.Name,
+		Image:         raw.Image,
+		Status:        raw.Status,
+		CPUPercent:    float32(raw.CPU),
+		MemTotalMB:    float32(raw.MemLimitMB),
+		MemUsedMB:     float32(raw.MemUsedMB),
+		Timestamp:     raw.Timestamp.Unix(),
+	}
+}
+
+===== FILE: ./batcher/batcher.go =====
+package batcher
+
+import (
+	"sync"
+	"time"
+)
+
+type LogBatcher struct {
+	mu        sync.Mutex
+	buffer    []interface{}
+	maxSize   int
+	interval  time.Duration
+	lastFlush time.Time
+}
+
+func New(max int, interval time.Duration) *LogBatcher {
+	return &LogBatcher{
+		maxSize:   max,
+		interval:  interval,
+		lastFlush: time.Now(),
+	}
+}
+
+func (b *LogBatcher) Add(entry interface{}) (out []interface{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.buffer = append(b.buffer, entry)
+
+	if len(b.buffer) >= b.maxSize || time.Since(b.lastFlush) >= b.interval {
+		out = b.buffer
+		b.buffer = nil
+		b.lastFlush = time.Now()
+	}
+	return
+}
+
+func (b *LogBatcher) Flush() []interface{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if len(b.buffer) == 0 {
+		return nil
+	}
+
+	out := b.buffer
+	b.buffer = nil
+	b.lastFlush = time.Now()
+	return out
+}
+
+===== FILE: ./metadata/metadata.go =====
+package metadata
+
+import (
+	"opslense-pulse/shared"
+)
+
+func Build(
+	agentID string,
+	hostname string,
+	osName string,
+	version string,
+	privateIP string,
+	publicIP string,
+	k8sIP string,
+	provider string,
+	region string,
+	userTags map[string]string,
+) shared.AgentInfo {
+
+	return shared.AgentInfo{
+		AgentID:   agentID,
+		Hostname:  hostname,
+		OS:        osName,
+		Version:   version,
+		PrivateIP: privateIP,
+		PublicIP:  publicIP,
+		K8sNodeIP: k8sIP,
+		Tags:      userTags,
+		SystemTags: map[string]string{
+			"cloud_provider": provider,
+			"cloud_region":   region,
+		},
+	}
+}
+
+===== FILE: ./main.go =====
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+
+	"opslense-pulse/agent/collector"
+	"opslense-pulse/agent/config"
+	"opslense-pulse/agent/containers"
+	"opslense-pulse/agent/heartbeat"
+	"opslense-pulse/agent/identity"
+	"opslense-pulse/agent/internal"
+	"opslense-pulse/agent/metrics"
+	"opslense-pulse/agent/queue"
+	"opslense-pulse/agent/retry"
+	"opslense-pulse/agent/safe"
+	"opslense-pulse/agent/sender"
+	"opslense-pulse/shared"
+)
+
+const AgentVersion = "1.0.0"
+
+func checkServerConnectivity(serverURL string) error {
+	healthURL := fmt.Sprintf("%s/health/live", serverURL)
+
+	resp, err := http.Get(healthURL)
+	if err != nil {
+		return fmt.Errorf("cannot connect to server: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server unhealthy, status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func main() {
+
+	shared.InitLogger("agent")
+	shared.Info("🚀 OpsLens-Pulse Agent starting...")
+
+	// -------------------------
+	// Config
+	// -------------------------
+
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Config path")
+	flag.Parse()
+
+	cfg, path, created, err := config.LoadOrCreateConfig(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if created {
+		log.Printf("📄 Config created at: %s\n", path)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
+	}
+
+	// -------------------------
+	// TLS HTTP Client
+	// -------------------------
+
+	sender.InitHTTPClient(cfg.Server.InsecureSkipVerify)
+	sender.SetAgentVersion(AgentVersion)
+	// -------------------------
+	// Identity
+	// -------------------------
+
+	agentID, err := identity.LoadOrCreateAgentID()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	hostname, _ := os.Hostname()
+	serverURL := cfg.Server.URL
+	apiKey := cfg.Server.APIKey
+
+	if serverURL == "" || apiKey == "" {
+		log.Fatal("server.url and server.api_key must be set")
+	}
+
+	// -------------------------
+	// Server Connectivity Check
+	// -------------------------
+
+	shared.Info("checking server connectivity...", "url", serverURL)
+
+	err = retry.Do(5, 3*time.Second, func() error {
+		return checkServerConnectivity(serverURL)
+	})
+
+	if err != nil {
+		shared.Error("❌ unable to reach server after retries", "error", err.Error())
+		log.Fatal("server connectivity check failed")
+	}
+
+	shared.Info("✅ connected to server successfully", "url", serverURL)
+	// -------------------------
+	// Agent Registration (ONCE)
+	// -------------------------
+
+	shared.Info("Registering agent metadata...")
+
+	provider, publicIP, region := detectCloud()
+	privateIP := getPrivateIP()
+	k8sIP := getK8sNodeIP()
+	osName, _ := metrics.HostInfo()
+
+	metadata := shared.AgentInfo{
+		AgentID:       agentID,
+		Hostname:      hostname,
+		PrivateIP:     privateIP,
+		PublicIP:      publicIP,
+		K8sNodeIP:     k8sIP,
+		OS:            osName,
+		Version:       AgentVersion,
+		Environment:   cfg.Tags["env"],
+		CloudProvider: provider,
+		CloudRegion:   region,
+		Tags:          cfg.Tags,
+		SystemTags: map[string]string{
+			"cloud_provider": provider,
+			"cloud_region":   region,
+		},
+	}
+
+	if err := retry.Do(3, 2*time.Second, func() error {
+		return sender.SendAgentRegistration(serverURL, apiKey, metadata)
+	}); err != nil {
+		shared.Error("agent registration failed", "error", err.Error())
+	} else {
+		shared.Info("agent registered successfully")
+	}
+
+	lastMetaHash := loadLastMetaHash()
+	currentHash := metadataHash(metadata)
+
+	if currentHash != lastMetaHash {
+
+		shared.Info("sending initial metadata to server")
+
+		err := retry.Do(10, 3*time.Second, func() error {
+			return sender.SendAgentRegistration(serverURL, apiKey, metadata)
+		})
+
+		if err != nil {
+			shared.Error("fatal: cannot register agent", "error", err.Error())
+			log.Fatal("registration failed permanently")
+		}
+
+		saveMetaHash(currentHash)
+		lastMetaHash = currentHash
+
+		shared.Info("agent registered successfully")
+	}
+
+	// -------------------------
+	// Context + Shutdown
+	// -------------------------
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// -------------------------
+	// Metadata Watcher (IP Change Detection)
+	// -------------------------
+
+	safe.Go("metadata-watcher", func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+
+			case <-ctx.Done():
+				return
+
+			case <-ticker.C:
+
+				newHostname, _ := os.Hostname()
+				newProvider, newPublicIP, newRegion := detectCloud()
+				newPrivateIP := getPrivateIP()
+				newK8sIP := getK8sNodeIP()
+				newOS, _ := metrics.HostInfo()
+
+				newMetadata := shared.AgentInfo{
+					AgentID:       agentID,
+					Hostname:      newHostname,
+					PrivateIP:     newPrivateIP,
+					PublicIP:      newPublicIP,
+					K8sNodeIP:     newK8sIP,
+					OS:            newOS,
+					Version:       AgentVersion,
+					Environment:   cfg.Tags["env"],
+					CloudProvider: newProvider,
+					CloudRegion:   newRegion,
+					Tags:          cfg.Tags,
+					SystemTags: map[string]string{
+						"cloud_provider": newProvider,
+						"cloud_region":   newRegion,
+					},
+				}
+
+				newHash := metadataHash(newMetadata)
+
+				if newHash == lastMetaHash {
+					continue
+				}
+
+				shared.Info("metadata change detected, updating agent")
+
+				err := retry.Do(3, 2*time.Second, func() error {
+					return sender.SendAgentRegistration(serverURL, apiKey, newMetadata)
+				})
+
+				if err != nil {
+					shared.Error("metadata update failed", "error", err.Error())
+					continue
+				}
+
+				lastMetaHash = newHash
+
+				shared.Info("agent metadata updated successfully")
+				internal.IncMetadataUpdate()
+			}
+		}
+	})
+	defer cancel()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	// -------------------------
+	// Queues
+	// -------------------------
+
+	metricsQueue := queue.New(filepath.Join(collector.QueueDir, "metrics.queue"))
+	logsQueue := queue.New(filepath.Join(collector.QueueDir, "logs.queue"))
+
+	safe.Go("metrics-sender", func() {
+		queue.StartMetricsSender(ctx, metricsQueue, serverURL, apiKey)
+	})
+
+	safe.Go("logs-sender", func() {
+		queue.StartLogsSender(ctx, logsQueue, serverURL, apiKey)
+	})
+	// -------------------------
+	// Log Sources (file / dir )
+	// -------------------------
+
+	for _, src := range cfg.Agent.Logs {
+		srcCopy := src
+		safe.Go("log-source-"+srcCopy.Name, func() {
+			collector.StartLogSource(
+				ctx,
+				agentID,
+				hostname,
+				srcCopy,
+				logsQueue,
+			)
+		})
+	}
+
+	// -------------------------
+	// Docker collectors
+	// -------------------------
+
+	if _, err := containers.ListRunning(ctx); err == nil {
+		safe.Go("container-metrics", func() {
+			collector.StartContainerMetricsCollector(
+				ctx,
+				agentID,
+				hostname,
+				serverURL,
+				apiKey,
+				10,
+			)
+		})
+
+		safe.Go("container-logs", func() {
+			collector.StartContainerLogsCollector(
+				ctx,
+				agentID,
+				hostname,
+				logsQueue,
+				10,
+			)
+		})
+	}
+
+	// -------------------------
+	// Main Metrics Loop
+	// -------------------------
+
+	interval := cfg.Agent.IntervalSeconds
+
+	if internal.FileSize(filepath.Join(collector.QueueDir, "metrics.queue")) > 100*1024*1024 {
+		interval = interval * 2 // slow down if queue > 100MB
+	}
+
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+
+		case <-ctx.Done():
+			shared.Info("🛑 Agent shutting down...")
+			containers.Shutdown()
+			return
+
+		case <-sig:
+			cancel()
+
+		case <-ticker.C:
+			disks := metrics.DiskUsageAll()
+			osName, uptime := metrics.HostInfo()
+			health := metrics.GetAgentHealth()
+			health.QueueSizeBytes = internal.FileSize(filepath.Join(collector.QueueDir, "metrics.queue"))
+			health.LogQueueSizeBytes = internal.FileSize(filepath.Join(collector.QueueDir, "logs.queue"))
+			health.ConsecutiveFailures = internal.GetFailures()
+			health.LastSendSuccessUnix = internal.GetLastSuccess()
+			health.MetadataUpdates = internal.GetMetadataUpdates()
+			cpu := metrics.CPUPercent()
+			cpuAnomaly := metrics.DetectCPUAnomaly(cpu)
+			memTotal, memUsed := metrics.Memory()
+			memAnomaly := metrics.DetectMemoryAnomaly(memUsed, memTotal)
+			netRates := metrics.NetworkRates()
+
+			var network []shared.NetworkInterface
+			for _, n := range netRates {
+				network = append(network, shared.NetworkInterface{
+					Name:   n.Name,
+					InBps:  float32(n.RecvPerSec),
+					OutBps: float32(n.SentPerSec),
+				})
+			}
+
+			m := shared.HostMetrics{
+				AgentID:    agentID,
+				Hostname:   hostname,
+				OS:         osName,
+				Version:    AgentVersion,
+				Timestamp:  time.Now().Unix(),
+				Cores:      runtime.NumCPU(),
+				CPUPercent: float32(cpu),
+
+				CPUCritical: cpuAnomaly.Critical,
+				CPUSpike:    cpuAnomaly.Spike,
+				MemTotalMB:  float32(memTotal),
+				MemUsedMB:   float32(memUsed),
+				MemCritical: memAnomaly.Critical,
+				MemPressure: memAnomaly.Pressure,
+				Disks:       disks,
+				UptimeSec:   uptime,
+				Network:     network,
+				Agent: shared.AgentHealth{
+					CPUPercent:      health.CPUPercent,
+					MemoryMB:        health.MemoryMB,
+					Goroutines:      health.Goroutines,
+					UptimeSec:       health.UptimeSec,
+					MetricsFailures: health.MetricsFailures,
+					LogFailures:     health.LogFailures,
+				},
+			}
+
+			// Enqueue metrics
+			if err := metricsQueue.Enqueue(m); err != nil {
+				shared.Error("metrics queue error", "error", err.Error())
+			}
+			// Heartbeat (direct)
+			_ = retry.Do(3, 2*time.Second, func() error {
+				return heartbeat.Send(serverURL, apiKey, agentID, hostname)
+			})
+		}
+	}
+}
+
+func getPrivateIP() string {
+
+	// Step 1: detect default route interface
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err == nil {
+		defer conn.Close()
+
+		localAddr := conn.LocalAddr().(*net.UDPAddr)
+		if localAddr.IP != nil {
+			return localAddr.IP.String()
+		}
+	}
+
+	// Step 2: fallback to scanning interfaces
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+
+	for _, iface := range ifaces {
+
+		// Skip down or loopback
+		if iface.Flags&net.FlagUp == 0 ||
+			iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		// Skip virtual interfaces
+		if strings.HasPrefix(iface.Name, "docker") ||
+			strings.HasPrefix(iface.Name, "veth") ||
+			strings.HasPrefix(iface.Name, "cni") ||
+			strings.HasPrefix(iface.Name, "flannel") {
+			continue
+		}
+
+		addrs, _ := iface.Addrs()
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				ip := ipnet.IP
+				if ip == nil || ip.To4() == nil {
+					continue
+				}
+
+				if isPrivateIP(ip) {
+					return ip.String()
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func isPrivateIP(ip net.IP) bool {
+
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+	}
+
+	for _, cidr := range privateRanges {
+		_, block, _ := net.ParseCIDR(cidr)
+		if block.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
+var cachedProvider string
+var cachedRegion string
+var cachedPublicIP string
+var lastCloudCheck time.Time
+
+func detectCloud() (string, string, string) {
+
+	// Cache for 15 minutes
+	if time.Since(lastCloudCheck) < 15*time.Minute && cachedProvider != "" {
+		return cachedProvider, cachedPublicIP, cachedRegion
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	// ===============================
+	// AWS IMDSv2
+	// ===============================
+
+	tokenReq, _ := http.NewRequest("PUT",
+		"http://169.254.169.254/latest/api/token",
+		nil)
+
+	tokenReq.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+
+	tokenResp, err := client.Do(tokenReq)
+	if err == nil && tokenResp.StatusCode == 200 {
+		defer tokenResp.Body.Close()
+
+		tokenBytes, _ := io.ReadAll(tokenResp.Body)
+		token := strings.TrimSpace(string(tokenBytes))
+
+		metaReq, _ := http.NewRequest("GET",
+			"http://169.254.169.254/latest/meta-data/public-ipv4",
+			nil)
+
+		metaReq.Header.Set("X-aws-ec2-metadata-token", token)
+
+		metaResp, err2 := client.Do(metaReq)
+		if err2 == nil && metaResp.StatusCode == 200 {
+			defer metaResp.Body.Close()
+			body, _ := io.ReadAll(metaResp.Body)
+
+			cachedProvider = "aws"
+			cachedPublicIP = strings.TrimSpace(string(body))
+			cachedRegion = ""
+			lastCloudCheck = time.Now()
+
+			return cachedProvider, cachedPublicIP, cachedRegion
+		}
+	}
+
+	// ===============================
+	// GCP
+	// ===============================
+
+	gcpReq, _ := http.NewRequest("GET",
+		"http://metadata.google.internal/computeMetadata/v1/instance",
+		nil)
+	gcpReq.Header.Set("Metadata-Flavor", "Google")
+
+	if resp, err := client.Do(gcpReq); err == nil && resp.StatusCode == 200 {
+		resp.Body.Close()
+
+		cachedProvider = "gcp"
+		cachedPublicIP = ""
+		cachedRegion = ""
+		lastCloudCheck = time.Now()
+
+		return cachedProvider, cachedPublicIP, cachedRegion
+	}
+
+	// ===============================
+	// Fallback (On-Prem)
+	// ===============================
+
+	if resp, err := client.Get("https://api.ipify.org"); err == nil {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+
+		cachedProvider = "onprem"
+		cachedPublicIP = strings.TrimSpace(string(body))
+		cachedRegion = ""
+		lastCloudCheck = time.Now()
+
+		return cachedProvider, cachedPublicIP, cachedRegion
+	}
+
+	return "unknown", "", ""
+}
+
+func getK8sNodeIP() string {
+
+	// 1️⃣ If explicitly injected (best way)
+	if ip := os.Getenv("K8S_NODE_IP"); ip != "" {
+		return ip
+	}
+
+	// 2️⃣ Detect if running inside Kubernetes
+	if _, err := os.Stat("/var/run/secrets/kubernetes.io"); err == nil {
+
+		// Inside K8s, but node IP not injected
+		// Fallback to private IP (safe assumption)
+		return getPrivateIP()
+	}
+
+	return ""
+}
+
+func metadataHash(m shared.AgentInfo) string {
+
+	data := strings.Join([]string{
+		m.AgentID,
+		m.Hostname,
+		m.PrivateIP,
+		m.PublicIP,
+		m.K8sNodeIP,
+		m.OS,
+		m.Version,
+		m.Environment,
+		m.CloudProvider,
+		m.CloudRegion,
+	}, "|")
+
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
+func loadLastMetaHash() string {
+	path := filepath.Join(collector.StateDir, "metadata.hash")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func saveMetaHash(hash string) {
+	path := filepath.Join(collector.StateDir, "metadata.hash")
+	tmp := path + ".tmp"
+	_ = os.WriteFile(tmp, []byte(hash), 0600)
+	_ = os.Rename(tmp, path)
+}
+

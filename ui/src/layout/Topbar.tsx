@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react"
 import GlobalSearch from "../shared/components/GlobalSearch"
+import { useAuth } from "../features/auth/AuthContext"
+import { useNavigate } from "react-router-dom"
 import {
   Bell,
   HelpCircle,
@@ -11,6 +13,8 @@ import {
 export default function TopBar() {
   const [isDark, setIsDark] = useState(true)
   const [open, setOpen] = useState(false)
+  const { logout } = useAuth()
+  const navigate = useNavigate()
 
   // Load saved theme
   useEffect(() => {
@@ -40,6 +44,11 @@ export default function TopBar() {
       localStorage.setItem("theme", "dark")
       setIsDark(true)
     }
+  }
+
+  function handleLogout() {
+    logout()
+    navigate("/login", { replace: true })
   }
 
   return (
@@ -89,7 +98,9 @@ export default function TopBar() {
             <div className="dropdown">
               <div>Profile</div>
               <div>Settings</div>
-              <div className="danger">Logout</div>
+              <div className="danger" onClick={handleLogout}>
+                Logout
+              </div>
             </div>
           )}
         </div>

@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"time"
 
+	"opslense-pulse/agent/internal"
 	"opslense-pulse/agent/metrics"
 	"opslense-pulse/shared"
 )
@@ -38,6 +40,7 @@ func SetAgentVersion(v string) {
 }
 
 func handleFailure() {
+	internal.IncFailure()
 	n := atomic.AddInt32(&consecutiveFailures, 1)
 
 	if n > 5 {
@@ -46,6 +49,7 @@ func handleFailure() {
 }
 
 func handleSuccess() {
+	internal.ResetFailure()
 	atomic.StoreInt32(&consecutiveFailures, 0)
 }
 
@@ -146,5 +150,36 @@ func SendContainerMetrics(serverURL, apiKey string, m shared.ContainerMetrics) e
 	}
 
 	handleSuccess()
+	return nil
+}
+
+func SendAgentRegistration(serverURL, apiKey string, a shared.AgentInfo) error {
+
+	body, _ := json.Marshal(a)
+
+	req, _ := http.NewRequest("POST",
+		fmt.Sprintf("%s/api/agents/register", serverURL),
+		bytes.NewBuffer(body),
+	)
+
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf(
+			"registration failed: status=%d body=%s",
+			resp.StatusCode,
+			string(bodyBytes),
+		)
+	}
+
 	return nil
 }

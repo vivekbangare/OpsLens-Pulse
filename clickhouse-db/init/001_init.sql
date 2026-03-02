@@ -13,14 +13,20 @@ CREATE TABLE IF NOT EXISTS agents
     agent_id String,
 
     hostname LowCardinality(String),
-    ip String,
+    private_ip String,
     public_ip String,
+    remote_ip String,
+    k8s_node_ip String,
 
     os LowCardinality(String),
     version LowCardinality(String),
     environment LowCardinality(String),
+    cloud_provider LowCardinality(String),
+    cloud_region LowCardinality(String),
+
 
     tags String,
+    system_tags String,
 
     first_seen DateTime DEFAULT now(),
     updated_at DateTime DEFAULT now()
@@ -68,9 +74,6 @@ CREATE TABLE IF NOT EXISTS host_metrics
 
     uptime_sec UInt64,
 
-    ip String,
-    public_ip String,
-
     -- Agent internal health
     agent_cpu_percent Float32,
     agent_mem_mb Float32,
@@ -78,8 +81,6 @@ CREATE TABLE IF NOT EXISTS host_metrics
     agent_uptime_sec UInt64,
     metrics_failures UInt64,
     log_failures UInt64,
-
-    tags String
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)

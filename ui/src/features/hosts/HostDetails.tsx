@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { useNavigate, useParams } from "react-router-dom"
+import { formatUptime } from "../../shared/lib/utils/time"
 
 import {
   fetchLogs,
@@ -18,7 +19,7 @@ interface HostSummary {
   network_in_mb?: number
   network_out_mb?: number
   uptime_sec?: number
-  tags?: Tags
+  tags?: Tags | null
 }
 
 interface LogEntry {
@@ -44,19 +45,14 @@ export default function HostDetails() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [summary, setSummary] = useState<HostSummary | null>(null)
   const [containers, setContainers] = useState<ContainerMetric[]>([])
-  const [loading, setLoading] = useState(true)
 
-  const [selectedSource, setSelectedSource] = useState("all")
-  const [selectedType, setSelectedType] = useState("all")
+  const maxLogs = 200
 
   useEffect(() => {
     loadAll()
-    const interval = setInterval(loadAll, 5000)
-    return () => clearInterval(interval)
   }, [agentId])
 
   async function loadAll() {
-    setLoading(true)
     try {
       const [summaryData, logData, containerData, hostsData] =
         await Promise.all([
@@ -74,31 +70,93 @@ export default function HostDetails() {
         summaryData.tags = currentHost?.tags ?? null
       }
 
+      const sortedLogs = Array.isArray(logData)
+        ? [...logData]
+            .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+            .slice(0, maxLogs)
+        : []
+
       setSummary(summaryData ?? null)
-      setLogs(Array.isArray(logData) ? logData : [])
+      setLogs(sortedLogs)
       setContainers(Array.isArray(containerData) ? containerData : [])
 
     } catch (err) {
       console.error("Unexpected error:", err)
-    } finally {
-      setLoading(false)
     }
   }
 
-  const filteredLogs = logs.filter(l => {
-    const sourceMatch =
-      selectedSource === "all" || l.source_name === selectedSource
+  async function refreshLogs() {
+    const logData = await fetchLogs(id)
 
-    const typeMatch =
-      selectedType === "all" || l.source_type === selectedType
+    const sortedLogs = Array.isArray(logData)
+      ? [...logData]
+          .sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0))
+          .slice(0, maxLogs)
+      : []
 
-    return sourceMatch && typeMatch
-  })
+    setLogs(sortedLogs)
+  }
+
+  function formatDate(ts?: number) {
+    if (!ts) return "—"
+    return new Date(ts * 1000).toLocaleString()
+  }
+
+  function truncate(message?: string) {
+    if (!message) return ""
+    return message.length > 300
+      ? message.slice(0, 300) + "..."
+      : message
+  }
+
+  function copyLogs() {
+    const text = logs
+      .map(
+        l =>
+          `${formatDate(l.timestamp)} [${l.level}] ${l.source_name} - ${l.message}`
+      )
+      .join("\n")
+
+    navigator.clipboard.writeText(text)
+  }
+
+  function downloadLogs() {
+    const text = logs
+      .map(
+        l =>
+          `${formatDate(l.timestamp)} [${l.level}] ${l.source_name} - ${l.message}`
+      )
+      .join("\n")
+
+    const blob = new Blob([text], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `host-${agentId}-logs.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // Last 1h summary
+  const now = Date.now() / 1000
+  const lastHourLogs = logs.filter(
+    l => l.timestamp && l.timestamp >= now - 3600
+  )
+
+  const errorCount = lastHourLogs.filter(l => l.level === "error").length
+  const warnCount = lastHourLogs.filter(l => l.level === "warn").length
+  const infoCount = lastHourLogs.filter(l => l.level === "info").length
+
+  function levelColor(level?: string) {
+    if (level === "error") return "#ef4444"
+    if (level === "warn") return "#f59e0b"
+    if (level === "critical") return "#dc2626"
+    return "#22c55e"
+  }
 
   return (
     <div className="pageContainer">
 
-      {/* HEADER */}
       <div className="detailsHeader">
         <div>
           <h2>Host Details</h2>
@@ -110,92 +168,128 @@ export default function HostDetails() {
         </button>
       </div>
 
-      {/* METRICS GRID */}
       <div className="metricsGridCompact">
-
         <Metric label="CPU">
           {summary?.cpu_percent?.toFixed(1) ?? "—"} %
         </Metric>
-
         <Metric label="RAM">
           {summary?.mem_used_mb ?? "—"} /{" "}
           {summary?.mem_total_mb ?? "—"} MB
         </Metric>
-
         <Metric label="Disk">
           {summary?.disk_used_mb ?? "—"} MB
         </Metric>
-
         <Metric label="Net In">
           {summary?.network_in_mb ?? "—"} MB
         </Metric>
-
         <Metric label="Net Out">
           {summary?.network_out_mb ?? "—"} MB
         </Metric>
-
         <Metric label="Uptime">
-          {summary?.uptime_sec ?? "—"}
+          {formatUptime(summary?.uptime_sec)}
         </Metric>
-
-      </div>
-
-      {/* TAGS */}
-      <div className="cardPanel compactCard">
-        <strong>Tags:</strong>{" "}
-        {summary?.tags && Object.keys(summary.tags).length > 0
-          ? Object.entries(summary.tags).map(([k, v]) => (
-              <span key={k} className="tagChip">
-                {k}: {v}
-              </span>
-            ))
-          : "No tags"}
       </div>
 
       {/* LOGS */}
       <div className="cardPanel compactCard">
-        <div className="logsHeaderRow">
-          <h3>Logs</h3>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "12px",
+          }}
+        >
+          <h3>Logs (Last {maxLogs})</h3>
 
-          <div className="logsFiltersCompact">
-            <select
-              className="selectCompact"
-              value={selectedSource}
-              onChange={(e) => setSelectedSource(e.target.value)}
-            >
-              <option value="all">All Sources</option>
-              {Array.from(new Set(logs.map(l => l.source_name).filter(Boolean)))
-                .map((src) => (
-                  <option key={src} value={src}>
-                    {src}
-                  </option>
-                ))}
-            </select>
-
-            <select
-              className="selectCompact"
-              value={selectedType}
-              onChange={(e) => setSelectedType(e.target.value)}
-            >
-              <option value="all">All Types</option>
-              {Array.from(new Set(logs.map(l => l.source_type).filter(Boolean)))
-                .map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-            </select>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button onClick={refreshLogs}>Refresh</button>
+            <button onClick={copyLogs}>Copy</button>
+            <button onClick={downloadLogs}>Download</button>
+            <button onClick={() => navigate(`/logs?agent_id=${agentId}`)}>
+              View in Log Explorer →
+            </button>
           </div>
         </div>
 
-        <div className="logsCompact">
-          {filteredLogs.length === 0 && (
+        {/* Last 1h Summary */}
+        <div
+          style={{
+            marginBottom: "16px",
+            fontWeight: "bold",
+          }}
+        >
+          Last 1h:
+          <span style={{ color: "#ef4444", marginLeft: "12px" }}>
+            {errorCount} Errors
+          </span>
+          <span style={{ color: "#f59e0b", marginLeft: "12px" }}>
+            {warnCount} Warnings
+          </span>
+          <span style={{ color: "#3b82f6", marginLeft: "12px" }}>
+            {infoCount} Info
+          </span>
+        </div>
+
+        <div
+          style={{
+            maxHeight: "400px",
+            overflowY: "auto",
+            paddingRight: "8px",
+          }}
+        >
+          {logs.length === 0 && (
             <div className="subText">No logs available</div>
           )}
 
-          {filteredLogs.map((l, i) => (
-            <div key={i} className="logLineCompact">
-              [{l.level}] {l.message}
+          {logs.map((l, i) => (
+            <div
+              key={i}
+              style={{
+                marginBottom: "16px",
+                borderBottom: "1px solid rgba(255,255,255,0.05)",
+                paddingBottom: "10px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  gap: "16px",
+                  fontSize: "12px",
+                  marginBottom: "4px",
+                  alignItems: "center",
+                }}
+              >
+                <span style={{ color: "#9ca3af", minWidth: "160px" }}>
+                  {formatDate(l.timestamp)}
+                </span>
+
+                <span
+                  style={{
+                    color: levelColor(l.level),
+                    fontWeight: 600,
+                    minWidth: "80px",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {l.level}
+                </span>
+
+                <span style={{ color: "#60a5fa" }}>
+                  {l.source_name ?? "unknown"}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  fontFamily: "monospace",
+                  fontSize: "13px",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {truncate(l.message)}
+              </div>
             </div>
           ))}
         </div>
@@ -207,7 +301,7 @@ export default function HostDetails() {
         {containers.length === 0
           ? <div className="subText">No containers detected</div>
           : containers.map((c, i) => (
-              <div key={i} className="logLineCompact">
+              <div key={i} style={{ marginBottom: "8px" }}>
                 {c.name} — {c.status}
               </div>
             ))}

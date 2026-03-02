@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"opslense-pulse/shared"
 	"strings"
 )
@@ -19,25 +18,19 @@ func (c *ClickHouseStore) SaveMetrics(
 ) error {
 
 	ts := resolveTimestamp(m.Timestamp)
-	tagsJSON, err := json.Marshal(m.Tags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tags: %w", err)
-	}
 
 	// ---------------- host_metrics (single row) ----------------
 	if err := c.execWithRetry(ctx, `
 		INSERT INTO host_metrics
 		(tenant_id, agent_id, hostname, os, version,
-		 timestamp, cores,
-		 cpu_percent, cpu_critical, cpu_spike,
-		 mem_used_mb, mem_total_mb, mem_critical, mem_pressure,
-		 uptime_sec,
-		 ip, public_ip,
-		 agent_cpu_percent, agent_mem_mb,
-		 agent_goroutines, agent_uptime_sec,
-		 metrics_failures, log_failures,
-		 tags)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		timestamp, cores,
+		cpu_percent, cpu_critical, cpu_spike,
+		mem_used_mb, mem_total_mb, mem_critical, mem_pressure,
+		uptime_sec,
+		agent_cpu_percent, agent_mem_mb,
+		agent_goroutines, agent_uptime_sec,
+		metrics_failures, log_failures)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		m.TenantID,
 		m.AgentID,
@@ -54,15 +47,12 @@ func (c *ClickHouseStore) SaveMetrics(
 		boolToUInt8(m.MemCritical),
 		boolToUInt8(m.MemPressure),
 		m.UptimeSec,
-		m.IP,
-		m.PublicIP,
 		m.Agent.CPUPercent,
 		m.Agent.MemoryMB,
 		m.Agent.Goroutines,
 		m.Agent.UptimeSec,
 		m.Agent.MetricsFailures,
 		m.Agent.LogFailures,
-		string(tagsJSON),
 	); err != nil {
 		return err
 	}
@@ -368,15 +358,18 @@ func (c *ClickHouseStore) UpsertAgentMetadata(
 
 		return c.execWithRetry(ctx, `
 			INSERT INTO agents
-			(tenant_id, agent_id, hostname, ip, public_ip,
-			 os, version, environment, tags)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			(tenant_id, agent_id, hostname,
+			private_ip, public_ip, remote_ip, k8s_node_ip,
+			os, version, environment, tags)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
 			m.TenantID,
 			m.AgentID,
 			m.Hostname,
-			m.IP,
+			m.PrivateIP,
 			m.PublicIP,
+			m.RemoteIP,
+			m.K8sNodeIP,
 			m.OS,
 			m.Version,
 			m.Tags["env"],
@@ -396,6 +389,8 @@ func (c *ClickHouseStore) UpsertAgentHeartbeat(
 	hb shared.Heartbeat,
 ) error {
 
+	ts := resolveTimestamp(hb.Timestamp)
+
 	return c.execWithRetry(ctx, `
 		INSERT INTO agent_heartbeats
 		(tenant_id, agent_id, last_seen)
@@ -403,6 +398,6 @@ func (c *ClickHouseStore) UpsertAgentHeartbeat(
 	`,
 		hb.TenantID,
 		hb.AgentID,
-		hb.Timestamp,
+		ts,
 	)
 }

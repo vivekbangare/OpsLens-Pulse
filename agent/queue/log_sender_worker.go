@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"opslense-pulse/agent/internal"
 	"opslense-pulse/agent/retry"
 	"opslense-pulse/agent/sender"
 )
@@ -24,7 +25,6 @@ func StartLogsSender(ctx context.Context, q *FileQueue, serverURL, apiKey string
 
 		case <-ticker.C:
 
-			// 1️⃣ Read with short lock
 			q.mu.Lock()
 
 			file, err := os.Open(q.path)
@@ -33,30 +33,29 @@ func StartLogsSender(ctx context.Context, q *FileQueue, serverURL, apiKey string
 				continue
 			}
 
-			var lines [][]byte
+			tmpPath := q.path + ".tmp"
+			tmpFile, err := os.Create(tmpPath)
+			if err != nil {
+				file.Close()
+				q.mu.Unlock()
+				continue
+			}
+
 			scanner := bufio.NewScanner(file)
 			scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 			for scanner.Scan() {
-				b := make([]byte, len(scanner.Bytes()))
-				copy(b, scanner.Bytes())
-				lines = append(lines, b)
-			}
 
-			file.Close()
-			q.mu.Unlock()
-
-			if len(lines) == 0 {
-				continue
-			}
-
-			var unsent [][]byte
-
-			// 2️⃣ Send WITHOUT lock
-			for _, line := range lines {
+				line := scanner.Bytes()
 
 				var batch sender.LogBatch
 				if err := json.Unmarshal(line, &batch); err != nil {
+					continue
+				}
+
+				if internal.IsCircuitOpen() {
+					tmpFile.Write(line)
+					tmpFile.Write([]byte("\n"))
 					continue
 				}
 
@@ -65,23 +64,25 @@ func StartLogsSender(ctx context.Context, q *FileQueue, serverURL, apiKey string
 				})
 
 				if err != nil {
-					unsent = append(unsent, line)
-				}
-			}
 
-			// 3️⃣ Rewrite only unsent
-			q.mu.Lock()
+					internal.IncFailure()
 
-			tmpPath := q.path + ".tmp"
-			tmpFile, err := os.Create(tmpPath)
-			if err == nil {
-				for _, u := range unsent {
-					tmpFile.Write(u)
+					if internal.GetFailures() > 10 {
+						internal.OpenCircuit(30 * time.Second)
+					}
+
+					tmpFile.Write(line)
 					tmpFile.Write([]byte("\n"))
+
+				} else {
+					internal.ResetFailure()
 				}
-				tmpFile.Close()
-				os.Rename(tmpPath, q.path)
 			}
+
+			file.Close()
+			tmpFile.Close()
+
+			os.Rename(tmpPath, q.path)
 
 			q.mu.Unlock()
 		}

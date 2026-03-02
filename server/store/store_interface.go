@@ -53,4 +53,9 @@ type Store interface {
 		sourceType string,
 		from, to time.Time,
 	) (TimelineResult, error)
+	FetchContainerMetrics(
+		ctx context.Context,
+		tenantID string,
+		agentID string,
+	) ([]shared.ContainerMetrics, error)
 }

@@ -18,7 +18,7 @@ func Send(serverURL, token, agentID, hostname string) error {
 	hb := shared.Heartbeat{
 		AgentID:   agentID,
 		Hostname:  hostname,
-		Timestamp: time.Now(),
+		Timestamp: time.Now().Unix(),
 	}
 
 	return sender.SendHeartbeat(serverURL, token, hb)

@@ -21,7 +21,7 @@ func AgentAuth(validator store.APIKeyValidator) func(http.Handler) http.Handler 
 				return
 			}
 
-			rawKey := strings.TrimPrefix(header, "Bearer ")
+			rawKey := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 
 			ok, tenantID, err := validator.ValidateAPIKey(rawKey)
 			if err != nil || !ok {

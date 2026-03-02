@@ -245,7 +245,13 @@ func (m *MemoryStore) UpsertAgentHeartbeat(ctx context.Context, hb shared.Heartb
 		h = &HostState{}
 		m.hosts[hb.Hostname] = h
 	}
-	h.LastSeen = hb.Timestamp.Unix()
+
+	if hb.Timestamp == 0 {
+		h.LastSeen = time.Now().Unix()
+	} else {
+		h.LastSeen = hb.Timestamp
+	}
+
 	return nil
 }
 
@@ -290,7 +296,9 @@ func (m *MemoryStore) UpsertAgentMetadata(ctx context.Context, hm shared.HostMet
 	} else {
 		// update metadata only
 		state.Metrics.Hostname = hm.Hostname
-		state.Metrics.IP = hm.IP
+		state.Metrics.PrivateIP = hm.PrivateIP
+		state.Metrics.PublicIP = hm.PublicIP
+		state.Metrics.K8sNodeIP = hm.K8sNodeIP
 		state.Metrics.OS = hm.OS
 		state.Metrics.Tags = hm.Tags
 	}
@@ -313,6 +321,27 @@ func (m *MemoryStore) GetLogsTimeline(
 		Points:  []TimelinePoint{},
 		Anomaly: false,
 	}, nil
+}
+
+func (m *MemoryStore) FetchContainerMetrics(
+	ctx context.Context,
+	tenantID string,
+	agentID string,
+) ([]shared.ContainerMetrics, error) {
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []shared.ContainerMetrics
+
+	for _, c := range m.containers {
+		if c.Metrics.TenantID == tenantID &&
+			c.Metrics.AgentID == agentID {
+			result = append(result, c.Metrics)
+		}
+	}
+
+	return result, nil
 }
 
 var _ Store = (*MemoryStore)(nil)

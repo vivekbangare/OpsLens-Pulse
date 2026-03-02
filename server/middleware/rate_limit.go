@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,13 +37,7 @@ func RateLimit(maxRequests int, window time.Duration) func(http.Handler) http.Ha
 
 			reqID := GetRequestID(r.Context())
 
-			ip := r.Header.Get("X-Forwarded-For")
-			if ip != "" {
-				parts := strings.Split(ip, ",")
-				ip = strings.TrimSpace(parts[0])
-			} else {
-				ip = r.RemoteAddr
-			}
+			ip := utils.GetClientIP(r)
 
 			mu.Lock()
 			v, exists := visitors[ip]

@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { useAuth } from "../auth/AuthContext"
+import { useAuth } from "./AuthContext"
 import { loginRequest } from "./api"
 
 function parseJwt(token: string) {
@@ -37,27 +37,9 @@ export default function Login() {
     setError("")
 
     try {
-      // const res = await fetch("/api/login", {
-      //   method: "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify({ username, password }),
-      // })
-
-      // if (!res.ok) {
-      //   throw new Error("Invalid credentials")
-      // }
-
-      // const data = await res.json()
-
       const data = await loginRequest(username, password)
 
-      if (!data.token) {
-        throw new Error("Token missing in response")
-      }
-
-      // 🔥 Decode token
       const payload = parseJwt(data.token)
-      console.log("JWT PAYLOAD:", payload)
 
       if (!payload) {
         throw new Error("Invalid token payload")
@@ -66,8 +48,8 @@ export default function Login() {
       login({
         token: data.token,
         user: {
-          id: payload.sub || "1",
-          username: payload.username || payload.sub || "admin",
+          id: payload.user_id || payload.sub || "1",
+          username: payload.username || "admin",
           email: payload.email || "",
           is_super_admin: payload.is_super_admin || false,
           tenants: payload.tenants || [],

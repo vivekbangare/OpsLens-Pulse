@@ -162,6 +162,14 @@ func main() {
 		),
 	)
 
+	mux.Handle("/api/containers/metrics",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("hosts.read", pgStore)(
+				api.ContainerMetricsQueryHandler(chStore),
+			),
+		),
+	)
+
 	mux.Handle("/api/logs/fetch",
 		middleware.UserAuth(jwtManager, pg)(
 			middleware.RequirePermission("logs.read", pgStore)(
@@ -196,6 +204,12 @@ func main() {
 		),
 	)
 
+	// -------- Agent Registration --------
+	mux.Handle("/api/agents/register",
+		middleware.AgentAuth(pgStore)(
+			api.RegisterAgentHandler(chStore),
+		),
+	)
 	// -------- Public --------
 	mux.Handle("/api/login", api.LoginHandler(pg, jwtManager, pgStore))
 

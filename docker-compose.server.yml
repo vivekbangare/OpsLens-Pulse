@@ -68,7 +68,7 @@ services:
 
 networks:
   opslens-net:
-    driver: bridge
+    external: true
 
 volumes:
   clickhouse-data:

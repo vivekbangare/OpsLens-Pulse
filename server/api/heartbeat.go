@@ -54,8 +54,8 @@ func HeartbeatHandler(st store.Store) http.HandlerFunc {
 		// 🔒 Enforce tenant from auth
 		hb.TenantID = tenantID
 
-		if hb.Timestamp.IsZero() {
-			hb.Timestamp = time.Now()
+		if hb.Timestamp == 0 {
+			hb.Timestamp = time.Now().Unix()
 		}
 
 		if err := st.UpsertAgentHeartbeat(r.Context(), hb); err != nil {

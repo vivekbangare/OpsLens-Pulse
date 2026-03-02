@@ -3,7 +3,6 @@ package shared
 import (
 	"encoding/json"
 	"log"
-	"opslense-pulse/server/logger"
 	"os"
 	"time"
 )
@@ -34,8 +33,14 @@ func logWithLevel(level string, msg string, kv ...interface{}) {
 		entry[key] = kv[i+1]
 	}
 
-	b, _ := json.Marshal(entry)
-	logger.Log.Info(string(b))
+	b, err := json.Marshal(entry)
+	if err != nil {
+		log.Println("failed to marshal log entry:", err)
+		return
+	}
+
+	// 🔥 DO NOT use server/logger
+	log.Println(string(b))
 }
 
 func Info(msg string, kv ...interface{}) {

@@ -41,6 +41,16 @@ func LogsHandler(store store.Store) http.HandlerFunc {
 			return
 		}
 
+		if len(batch.Logs) > 5000 {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				"log batch too large (max 5000)",
+				reqID,
+			)
+			return
+		}
 		batch.TenantID = tenantID
 
 		log := middleware.GetLogger(r.Context())
@@ -207,7 +217,16 @@ func LogsTimelineHandler(s store.Store) http.HandlerFunc {
 			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid to timestamp", reqID)
 			return
 		}
-
+		if to.Sub(from) > 30*24*time.Hour {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_request",
+				"time range too large (max 30 days)",
+				reqID,
+			)
+			return
+		}
 		result, err := s.GetLogsTimeline(
 			r.Context(),
 			tenantID,

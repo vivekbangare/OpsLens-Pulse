@@ -7,7 +7,7 @@ import (
 	"os"
 	"time"
 
-	"opslense-pulse/agent/metrics"
+	"opslense-pulse/agent/internal"
 	"opslense-pulse/agent/retry"
 	"opslense-pulse/agent/sender"
 	"opslense-pulse/shared"
@@ -34,29 +34,30 @@ func StartMetricsSender(ctx context.Context, q *FileQueue, serverURL, apiKey str
 				continue
 			}
 
-			var lines [][]byte
+			tmpPath := q.path + ".tmp"
+			tmpFile, err := os.Create(tmpPath)
+			if err != nil {
+				file.Close()
+				q.mu.Unlock()
+				continue
+			}
+
 			scanner := bufio.NewScanner(file)
 			scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 			for scanner.Scan() {
-				b := make([]byte, len(scanner.Bytes()))
-				copy(b, scanner.Bytes())
-				lines = append(lines, b)
-			}
 
-			file.Close()
-			q.mu.Unlock()
-
-			if len(lines) == 0 {
-				continue
-			}
-
-			var unsent [][]byte
-
-			for _, line := range lines {
+				line := scanner.Bytes()
 
 				var m shared.HostMetrics
 				if err := json.Unmarshal(line, &m); err != nil {
+					continue
+				}
+
+				// Circuit open → just rewrite
+				if internal.IsCircuitOpen() {
+					tmpFile.Write(line)
+					tmpFile.Write([]byte("\n"))
 					continue
 				}
 
@@ -65,23 +66,25 @@ func StartMetricsSender(ctx context.Context, q *FileQueue, serverURL, apiKey str
 				})
 
 				if err != nil {
-					metrics.IncMetricsFailure()
-					unsent = append(unsent, line)
-				}
-			}
 
-			q.mu.Lock()
+					internal.IncFailure()
 
-			tmpPath := q.path + ".tmp"
-			tmpFile, err := os.Create(tmpPath)
-			if err == nil {
-				for _, u := range unsent {
-					tmpFile.Write(u)
+					if internal.GetFailures() > 10 {
+						internal.OpenCircuit(30 * time.Second)
+					}
+
+					tmpFile.Write(line)
 					tmpFile.Write([]byte("\n"))
+
+				} else {
+					internal.ResetFailure()
 				}
-				tmpFile.Close()
-				os.Rename(tmpPath, q.path)
 			}
+
+			file.Close()
+			tmpFile.Close()
+
+			os.Rename(tmpPath, q.path)
 
 			q.mu.Unlock()
 		}

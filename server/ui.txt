@@ -1,0 +1,4355 @@
+===== FILE: ./middleware/recovery.go =====
+package middleware
+
+import (
+	"net/http"
+
+	"opslense-pulse/server/utils"
+
+	"go.uber.org/zap"
+)
+
+func Recovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reqID := GetRequestID(r.Context())
+		defer func() {
+			if rec := recover(); rec != nil {
+				logger := GetLogger(r.Context())
+				if logger == nil {
+					logger = zap.L()
+				}
+				logger.Error("panic recovered",
+					zap.Any("error", rec),
+				)
+				utils.WriteError(
+					w,
+					http.StatusInternalServerError,
+					"internal_error",
+					"unexpected server error",
+					reqID,
+				)
+			}
+		}()
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+===== FILE: ./middleware/user_auth.go =====
+package middleware
+
+import (
+	"context"
+	"database/sql"
+	"net/http"
+	"strings"
+
+	"opslense-pulse/server/auth"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+func UserAuth(jwtManager *auth.JWTManager, db *sql.DB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+			reqID := GetRequestID(r.Context())
+
+			header := r.Header.Get("Authorization")
+			if !strings.HasPrefix(header, "Bearer ") {
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing bearer token", reqID)
+				return
+			}
+
+			tokenStr := strings.TrimPrefix(header, "Bearer ")
+
+			claims, err := jwtManager.Validate(tokenStr)
+			if err != nil {
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid token", reqID)
+				return
+			}
+
+			tenantID := claims.TenantID
+			if tenantID == "" {
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing in token", reqID)
+				return
+			}
+
+			err = db.QueryRow(`
+				SELECT t.id
+				FROM tenants t
+				JOIN user_tenants ut ON ut.tenant_id = t.id
+				WHERE ut.user_id = $1
+				AND t.id = $2
+				AND t.is_active = true
+			`, claims.UserID, tenantID).Scan(&tenantID)
+
+			if err == sql.ErrNoRows {
+				utils.WriteError(w, http.StatusForbidden, "forbidden", "access denied", reqID)
+				return
+			}
+			if err != nil {
+				utils.WriteError(w, http.StatusInternalServerError, "internal_error", "database error", reqID)
+				return
+			}
+
+			permissions, err := store.LoadUserPermissions(db, claims.UserID, tenantID)
+			if err != nil {
+				utils.WriteError(w, http.StatusInternalServerError, "internal_error", "permission load failed", reqID)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), CtxUserID, claims.UserID)
+			ctx = context.WithValue(ctx, CtxTenantID, tenantID)
+			ctx = context.WithValue(ctx, CtxPermissions, permissions)
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+===== FILE: ./middleware/require_permission.go =====
+package middleware
+
+import (
+	"net/http"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+func RequirePermission(
+	permission string,
+	pgStore *store.PostgresStore,
+) func(http.Handler) http.Handler {
+
+	return func(next http.Handler) http.Handler {
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+			reqID := GetRequestID(r.Context())
+
+			perms, ok := r.Context().Value(CtxPermissions).(map[string]bool)
+			if !ok {
+
+				utils.WriteError(
+					w,
+					http.StatusForbidden,
+					"forbidden",
+					"permissions not found",
+					reqID,
+				)
+				return
+			}
+
+			if !perms[permission] {
+
+				// Extract context values
+				userID, _ := r.Context().Value(CtxUserID).(string)
+				tenantID, _ := r.Context().Value(CtxTenantID).(string)
+
+				go pgStore.InsertAuditLog(r.Context(), store.AuditLog{
+					TenantID:  tenantID,
+					UserID:    &userID,
+					Action:    "permission_denied",
+					Status:    "failure",
+					IPAddress: utils.GetClientIP(r),
+					UserAgent: r.UserAgent(),
+					Metadata: map[string]interface{}{
+						"permission": permission,
+						"path":       r.URL.Path,
+						"method":     r.Method,
+					},
+				})
+
+				utils.WriteError(
+					w,
+					http.StatusForbidden,
+					"forbidden",
+					"insufficient permissions",
+					reqID,
+				)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+===== FILE: ./middleware/rate_limit.go =====
+package middleware
+
+import (
+	"net/http"
+	"sync"
+	"time"
+
+	"opslense-pulse/server/utils"
+)
+
+type visitor struct {
+	lastSeen time.Time
+	count    int
+}
+
+var visitors = make(map[string]*visitor)
+var mu sync.Mutex
+
+func init() {
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			mu.Lock()
+			for ip, v := range visitors {
+				if time.Since(v.lastSeen) > 10*time.Minute {
+					delete(visitors, ip)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+}
+
+func RateLimit(maxRequests int, window time.Duration) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+			reqID := GetRequestID(r.Context())
+
+			ip := utils.GetClientIP(r)
+
+			mu.Lock()
+			v, exists := visitors[ip]
+			if !exists {
+				v = &visitor{lastSeen: time.Now()}
+				visitors[ip] = v
+			}
+
+			if time.Since(v.lastSeen) > window {
+				v.count = 0
+				v.lastSeen = time.Now()
+			}
+
+			v.count++
+			if v.count > maxRequests {
+				mu.Unlock()
+				utils.WriteError(w, http.StatusTooManyRequests, "rate_limited", "rate limit exceeded", reqID)
+				return
+			}
+			mu.Unlock()
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+===== FILE: ./middleware/context_keys.go =====
+package middleware
+
+type contextKey string
+
+const (
+	CtxUserID      contextKey = "user_id"
+	CtxTenantID    contextKey = "tenant_id"
+	CtxPermissions contextKey = "permissions"
+)
+
+===== FILE: ./middleware/request_id.go =====
+package middleware
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"opslense-pulse/server/logger"
+)
+
+const RequestIDKey contextKey = "request_id"
+const LoggerKey contextKey = "logger"
+
+func RequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		requestID := r.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+
+		w.Header().Set("X-Request-ID", requestID)
+
+		// Create request-scoped logger
+		reqLogger := logger.Log.With(
+			zap.String("request_id", requestID),
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+		)
+
+		ctx := context.WithValue(r.Context(), RequestIDKey, requestID)
+		ctx = context.WithValue(ctx, LoggerKey, reqLogger)
+
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func GetRequestID(ctx context.Context) string {
+	if v := ctx.Value(RequestIDKey); v != nil {
+		if id, ok := v.(string); ok {
+			return id
+		}
+	}
+	return ""
+}
+
+func GetLogger(ctx context.Context) *zap.Logger {
+	if v := ctx.Value(LoggerKey); v != nil {
+		if l, ok := v.(*zap.Logger); ok {
+			return l
+		}
+	}
+	return logger.Log
+}
+
+===== FILE: ./middleware/agent_auth.go =====
+package middleware
+
+import (
+	"context"
+	"net/http"
+	"strings"
+
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+func AgentAuth(validator store.APIKeyValidator) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+			reqID := GetRequestID(r.Context())
+
+			header := r.Header.Get("Authorization")
+			if !strings.HasPrefix(header, "Bearer ") {
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing api key", reqID)
+				return
+			}
+
+			rawKey := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+
+			ok, tenantID, err := validator.ValidateAPIKey(rawKey)
+			if err != nil || !ok {
+				utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid api key", reqID)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), CtxTenantID, tenantID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+===== FILE: ./logger/logger.go =====
+package logger
+
+import (
+	"go.uber.org/zap"
+)
+
+var Log *zap.Logger
+
+func Init() error {
+	var err error
+
+	Log, err = zap.NewProduction()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func Sync() {
+	if Log != nil {
+		_ = Log.Sync()
+	}
+}
+
+===== FILE: ./config/config.go =====
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+const DefaultPath = "/etc/opslens-pulse/server-config.yaml"
+
+type Config struct {
+	Server     ServerSection     `yaml:"server"`
+	ClickHouse ClickHouseSection `yaml:"clickhouse"`
+	Postgres   PostgresSection   `yaml:"postgres"`
+	Security   SecuritySection   `yaml:"security"`
+	Logging    LoggingSection    `yaml:"logging"`
+}
+
+type ServerSection struct {
+	ListenPort      int `yaml:"listen_port"`
+	ReadTimeoutSec  int `yaml:"read_timeout_sec"`
+	WriteTimeoutSec int `yaml:"write_timeout_sec"`
+	IdleTimeoutSec  int `yaml:"idle_timeout_sec"`
+	MaxHeaderBytes  int `yaml:"max_header_bytes"`
+
+	RateLimit struct {
+		Requests  int `yaml:"requests"`
+		WindowSec int `yaml:"window_sec"`
+	} `yaml:"rate_limit"`
+}
+
+type ClickHouseSection struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Database string `yaml:"database"`
+
+	Password string `yaml:"-"`
+
+	// Production tuning
+	MaxOpenConns       int `yaml:"max_open_conns"`
+	MaxIdleConns       int `yaml:"max_idle_conns"`
+	ConnMaxLifetimeMin int `yaml:"conn_max_lifetime_min"`
+
+	ConnectRetries int `yaml:"connect_retries"`
+	RetryDelaySec  int `yaml:"retry_delay_sec"`
+}
+
+type PostgresSection struct {
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	User     string `yaml:"user"`
+	Database string `yaml:"database"`
+
+	// Not from YAML
+	Password string `yaml:"-"`
+
+	// Production settings
+	SSLMode            string `yaml:"ssl_mode"` // disable | require | verify-full
+	MaxOpenConns       int    `yaml:"max_open_conns"`
+	MaxIdleConns       int    `yaml:"max_idle_conns"`
+	ConnMaxLifetimeMin int    `yaml:"conn_max_lifetime_min"`
+	ConnectRetries     int    `yaml:"connect_retries"`
+	RetryDelaySec      int    `yaml:"retry_delay_sec"`
+}
+
+type SecuritySection struct {
+	MaxBodyMB   int    `yaml:"max_body_mb"`
+	JWTSecret   string `yaml:"-"`
+	JWTIssuer   string `yaml:"jwt_issuer"`
+	JWTAudience string `yaml:"jwt_audience"`
+}
+
+type LoggingSection struct {
+	Level string `yaml:"level"`
+}
+
+func resolveSecret(envKey string, defaultFile string) (string, error) {
+
+	// 1️⃣ ENV override (Docker / K8s)
+	if v := os.Getenv(envKey); v != "" {
+		return v, nil
+	}
+
+	// 2️⃣ Secret file (On-Prem / Mounted secret)
+	if _, err := os.Stat(defaultFile); err == nil {
+		b, err := os.ReadFile(defaultFile)
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+
+	return "", fmt.Errorf("%s not configured", envKey)
+}
+
+func Load(path string) (*Config, error) {
+
+	if path == "" {
+		if env := os.Getenv("OPS_SERVER_CONFIG"); env != "" {
+			path = env
+		} else {
+			path = DefaultPath
+		}
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	cfg := &Config{}
+	if err := yaml.NewDecoder(f).Decode(cfg); err != nil {
+		return nil, err
+	}
+
+	// 🔐 Resolve Secrets
+
+	cfg.Security.JWTSecret, err = resolveSecret(
+		"JWT_SECRET",
+		"/etc/opslens-pulse/secrets/jwt.secret",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.Postgres.Password, err = resolveSecret(
+		"POSTGRES_PASSWORD",
+		"/etc/opslens-pulse/secrets/postgres.secret",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.ClickHouse.Password, err = resolveSecret(
+		"CLICKHOUSE_PASSWORD",
+		"/etc/opslens-pulse/secrets/clickhouse.secret",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return cfg, cfg.Validate()
+}
+
+func (c *Config) Validate() error {
+
+	if c.Server.ListenPort <= 0 || c.Server.ListenPort > 65535 {
+		return errors.New("invalid listen_port")
+	}
+
+	if c.Security.JWTSecret == "" {
+		return errors.New("JWT secret missing")
+	}
+
+	if c.Security.JWTIssuer == "" {
+		return errors.New("jwt_issuer missing")
+	}
+
+	if c.Security.JWTAudience == "" {
+		return errors.New("jwt_audience missing")
+	}
+
+	if c.Postgres.Host == "" {
+		return errors.New("postgres host missing")
+	}
+
+	if c.ClickHouse.Host == "" {
+		return errors.New("clickhouse host missing")
+	}
+
+	return nil
+}
+
+===== FILE: ./auth/jwt.go =====
+package auth
+
+import (
+	"errors"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
+
+type JWTManager struct {
+	secret   []byte
+	issuer   string
+	audience string
+}
+
+func NewJWTManager(secret, issuer, audience string) *JWTManager {
+	return &JWTManager{
+		secret:   []byte(secret),
+		issuer:   issuer,
+		audience: audience,
+	}
+}
+
+type Claims struct {
+	UserID       string   `json:"user_id"`
+	Username     string   `json:"username"`
+	TenantID     string   `json:"tenant_id"`
+	Permissions  []string `json:"permissions"`
+	IsSuperAdmin bool     `json:"is_super_admin"`
+	jwt.RegisteredClaims
+}
+
+func (j *JWTManager) Generate(
+	userID string,
+	username string,
+	tenantID string,
+	permissions []string,
+	isSuperAdmin bool,
+) (string, error) {
+
+	claims := Claims{
+		UserID:       userID,
+		Username:     username,
+		TenantID:     tenantID,
+		Permissions:  permissions,
+		IsSuperAdmin: isSuperAdmin,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    j.issuer,
+			Audience:  []string{j.audience},
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(j.secret)
+}
+
+func (j *JWTManager) Validate(tokenStr string) (*Claims, error) {
+
+	token, err := jwt.ParseWithClaims(
+		tokenStr,
+		&Claims{},
+		func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.New("unexpected signing method")
+			}
+			return j.secret, nil
+		},
+		jwt.WithIssuer(j.issuer),
+		jwt.WithAudience(j.audience),
+		jwt.WithLeeway(2*time.Minute), // clock skew tolerance
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+
+	return claims, nil
+}
+
+===== FILE: ./utils/response.go =====
+package utils
+
+import (
+	"encoding/json"
+	"net/http"
+)
+
+type APIError struct {
+	Error     string `json:"error"`
+	Message   string `json:"message"`
+	RequestID string `json:"request_id,omitempty"`
+}
+
+type APISuccess struct {
+	Data      interface{} `json:"data,omitempty"`
+	Message   string      `json:"message,omitempty"`
+	RequestID string      `json:"request_id,omitempty"`
+}
+
+func WriteJSON(w http.ResponseWriter, status int, payload interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func WriteError(w http.ResponseWriter, status int, errType string, message string, requestID string) {
+	WriteJSON(w, status, APIError{
+		Error:     errType,
+		Message:   message,
+		RequestID: requestID,
+	})
+}
+
+func WriteSuccess(w http.ResponseWriter, status int, data interface{}, message string, requestID string) {
+	WriteJSON(w, status, APISuccess{
+		Data:      data,
+		Message:   message,
+		RequestID: requestID,
+	})
+}
+
+===== FILE: ./utils/http.go =====
+package utils
+
+import (
+	"net"
+	"net/http"
+	"strings"
+)
+
+// GetClientIP extracts real client IP considering proxies.
+func GetClientIP(r *http.Request) string {
+
+	// X-Forwarded-For may contain multiple IPs: client,proxy1,proxy2
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	// Fallback to remote address
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
+}
+
+===== FILE: ./utils/validation.go =====
+package utils
+
+import (
+	"errors"
+	"strings"
+)
+
+// Validatable allows structs to implement self-validation
+type Validatable interface {
+	Validate() error
+}
+
+// ValidateRequest calls Validate() if struct implements it
+func ValidateRequest(v interface{}) error {
+	if validatable, ok := v.(Validatable); ok {
+		return validatable.Validate()
+	}
+	return nil
+}
+
+// Helper: required string
+func RequiredString(value string, field string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New(field + " is required")
+	}
+	return nil
+}
+
+// Helper: required positive number
+func RequiredPositiveInt(value int64, field string) error {
+	if value <= 0 {
+		return errors.New(field + " must be positive")
+	}
+	return nil
+}
+
+===== FILE: ./utils/json.go =====
+package utils
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+)
+
+// DecodeJSONStrict safely decodes JSON body into target struct
+// - Disallows unknown fields
+// - Prevents multiple JSON objects
+// - Handles empty body
+func DecodeJSONStrict(r *http.Request, dst interface{}) error {
+	if r.Body == nil {
+		return errors.New("request body is empty")
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+
+	// Ensure only single JSON object
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("multiple JSON objects in body")
+	}
+
+	return nil
+}
+
+===== FILE: ./db/clickhouse.go =====
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+
+	"opslense-pulse/server/config"
+
+	_ "github.com/ClickHouse/clickhouse-go/v2"
+)
+
+func NewClickHouse(cfg config.ClickHouseSection) (*sql.DB, error) {
+
+	if cfg.Port == 0 {
+		cfg.Port = 9000
+	}
+
+	dsn := fmt.Sprintf(
+		"tcp://%s:%d/%s?username=%s&password=%s",
+		cfg.Host,
+		cfg.Port,
+		cfg.Database,
+		cfg.User,
+		cfg.Password,
+	)
+
+	var dbConn *sql.DB
+	var err error
+
+	retries := cfg.ConnectRetries
+	if retries <= 0 {
+		retries = 3
+	}
+
+	retryDelay := time.Duration(cfg.RetryDelaySec) * time.Second
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
+	}
+
+	for i := 1; i <= retries; i++ {
+
+		dbConn, err = sql.Open("clickhouse", dsn)
+		if err != nil {
+			return nil, err
+		}
+
+		err = dbConn.Ping()
+		if err == nil {
+			break
+		}
+
+		if i == retries {
+			return nil, err
+		}
+
+		time.Sleep(retryDelay)
+	}
+
+	if cfg.MaxOpenConns > 0 {
+		dbConn.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+
+	if cfg.MaxIdleConns > 0 {
+		dbConn.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+
+	if cfg.ConnMaxLifetimeMin > 0 {
+		dbConn.SetConnMaxLifetime(
+			time.Duration(cfg.ConnMaxLifetimeMin) * time.Minute,
+		)
+	}
+
+	return dbConn, nil
+}
+
+===== FILE: ./db/postgres.go =====
+package db
+
+import (
+	"database/sql"
+	"fmt"
+	"time"
+
+	_ "github.com/lib/pq"
+
+	"opslense-pulse/server/config"
+)
+
+func NewPostgres(cfg config.PostgresSection) (*sql.DB, error) {
+
+	if cfg.Port == 0 {
+		cfg.Port = 5432
+	}
+
+	if cfg.SSLMode == "" {
+		cfg.SSLMode = "disable"
+	}
+
+	dsn := fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
+		cfg.Host,
+		cfg.Port,
+		cfg.User,
+		cfg.Password,
+		cfg.Database,
+		cfg.SSLMode,
+	)
+
+	var dbConn *sql.DB
+	var err error
+
+	retries := cfg.ConnectRetries
+	if retries <= 0 {
+		retries = 3
+	}
+
+	retryDelay := time.Duration(cfg.RetryDelaySec) * time.Second
+	if retryDelay <= 0 {
+		retryDelay = 2 * time.Second
+	}
+
+	for i := 1; i <= retries; i++ {
+
+		dbConn, err = sql.Open("postgres", dsn)
+		if err != nil {
+			return nil, err
+		}
+
+		err = dbConn.Ping()
+		if err == nil {
+			break
+		}
+
+		if i == retries {
+			return nil, err
+		}
+
+		time.Sleep(retryDelay)
+	}
+
+	// ---------- Pool Settings ----------
+	if cfg.MaxOpenConns > 0 {
+		dbConn.SetMaxOpenConns(cfg.MaxOpenConns)
+	}
+
+	if cfg.MaxIdleConns > 0 {
+		dbConn.SetMaxIdleConns(cfg.MaxIdleConns)
+	}
+
+	if cfg.ConnMaxLifetimeMin > 0 {
+		dbConn.SetConnMaxLifetime(
+			time.Duration(cfg.ConnMaxLifetimeMin) * time.Minute,
+		)
+	}
+
+	return dbConn, nil
+}
+
+===== FILE: ./api/audit.go =====
+package api
+
+import (
+	"net/http"
+	"time"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+func AuditLogsHandler(pgStore *store.PostgresStore) http.HandlerFunc {
+
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		fromStr := r.URL.Query().Get("from")
+		toStr := r.URL.Query().Get("to")
+
+		from, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid from timestamp", reqID)
+			return
+		}
+
+		to, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid to timestamp", reqID)
+			return
+		}
+
+		userID := r.URL.Query().Get("user_id")
+		action := r.URL.Query().Get("action")
+		status := r.URL.Query().Get("status")
+
+		logs, err := pgStore.GetAuditLogs(
+			r.Context(),
+			tenantID,
+			from,
+			to,
+			userID,
+			action,
+			status,
+			100,
+		)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "query failed", reqID)
+			return
+		}
+
+		utils.WriteSuccess(w, http.StatusOK, logs, "", reqID)
+	}
+}
+
+===== FILE: ./api/metrics.go =====
+package api
+
+import (
+	"net/http"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
+	"opslense-pulse/shared"
+)
+
+func MetricsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
+			return
+		}
+
+		var metrics shared.HostMetrics
+		if err := utils.DecodeJSONStrict(r, &metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		if err := validation.ValidateHostMetrics(&metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		// 🔒 Enforce tenant from auth
+		metrics.TenantID = tenantID
+		metrics.PublicIP = extractPublicIP(r)
+
+		if err := store.UpsertAgentMetadata(r.Context(), metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		if err := store.SaveMetrics(r.Context(), metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./api/auth.go =====
+package api
+
+import (
+	"database/sql"
+	"net/http"
+
+	"golang.org/x/crypto/bcrypt"
+
+	"opslense-pulse/server/auth"
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token string `json:"token"`
+}
+
+func LoginHandler(
+	db *sql.DB,
+	jwtManager *auth.JWTManager,
+	pgStore *store.PostgresStore,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		// -----------------------------------------
+		// Parse Request (STRICT JSON)
+		// -----------------------------------------
+		var req LoginRequest
+		if err := utils.DecodeJSONStrict(r, &req); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_json", "invalid request body", reqID)
+			return
+		}
+
+		// -----------------------------------------
+		// Validate Credentials
+		// -----------------------------------------
+		var userID string
+		var passwordHash string
+		var isSuperAdmin bool
+
+		err := db.QueryRow(`
+			SELECT id, password_hash, is_super_admin
+			FROM users
+			WHERE username = $1
+			  AND is_active = true
+		`, req.Username).Scan(&userID, &passwordHash, &isSuperAdmin)
+
+		if err == sql.ErrNoRows {
+
+			go pgStore.InsertAuditLog(r.Context(), store.AuditLog{
+				TenantID:  "unknown", // unknown at this point
+				UserID:    nil,
+				Action:    "login",
+				Status:    "failure",
+				IPAddress: utils.GetClientIP(r),
+				UserAgent: r.UserAgent(),
+				Metadata: map[string]interface{}{
+					"username": req.Username,
+					"reason":   "user_not_found",
+				},
+			})
+
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials", reqID)
+			return
+		}
+
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "database error", reqID)
+			return
+		}
+
+		if bcrypt.CompareHashAndPassword(
+			[]byte(passwordHash),
+			[]byte(req.Password),
+		) != nil {
+
+			go pgStore.InsertAuditLog(r.Context(), store.AuditLog{
+				TenantID:  "unknown", // still unknown until tenant resolution
+				UserID:    &userID,
+				Action:    "login",
+				Status:    "failure",
+				IPAddress: utils.GetClientIP(r),
+				UserAgent: r.UserAgent(),
+				Metadata: map[string]interface{}{
+					"reason": "invalid_password",
+				},
+			})
+
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid credentials", reqID)
+			return
+		}
+
+		// -----------------------------------------
+		// Resolve Default Tenant (Zero Trust)
+		// -----------------------------------------
+		var tenantID string
+		err = db.QueryRow(`
+			SELECT t.id
+			FROM tenants t
+			JOIN user_tenants ut ON ut.tenant_id = t.id
+			WHERE ut.user_id = $1
+			  AND t.is_active = true
+			LIMIT 1
+		`, userID).Scan(&tenantID)
+
+		if err != nil {
+
+			go pgStore.InsertAuditLog(r.Context(), store.AuditLog{
+				TenantID:  "unknown",
+				UserID:    &userID,
+				Action:    "login",
+				Status:    "failure",
+				IPAddress: utils.GetClientIP(r),
+				UserAgent: r.UserAgent(),
+				Metadata: map[string]interface{}{
+					"reason": "no_active_tenant",
+				},
+			})
+
+			utils.WriteError(w, http.StatusForbidden, "forbidden", "no active tenant assigned", reqID)
+			return
+		}
+
+		// -----------------------------------------
+		// Load Permissions For Tenant
+		// -----------------------------------------
+		permsMap, err := store.LoadUserPermissions(db, userID, tenantID)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to load permissions", reqID)
+			return
+		}
+
+		var permList []string
+		for p := range permsMap {
+			permList = append(permList, p)
+		}
+
+		// -----------------------------------------
+		// Generate JWT (Tenant + Permissions inside)
+		// -----------------------------------------
+		token, err := jwtManager.Generate(
+			userID,
+			req.Username,
+			tenantID,
+			permList,
+			isSuperAdmin,
+		)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to generate token", reqID)
+			return
+		}
+		// -----------------------------------------
+		// Audit: Successful Login
+		// -----------------------------------------
+		go pgStore.InsertAuditLog(r.Context(), store.AuditLog{
+			TenantID:  tenantID,
+			UserID:    &userID,
+			Action:    "login",
+			Status:    "success",
+			IPAddress: utils.GetClientIP(r),
+			UserAgent: r.UserAgent(),
+			Metadata: map[string]interface{}{
+				"is_super_admin": isSuperAdmin,
+			},
+		})
+
+		// -----------------------------------------
+		// Return Token (SAME RESPONSE FORMAT)
+		// -----------------------------------------
+		utils.WriteSuccess(
+			w,
+			http.StatusOK,
+			LoginResponse{Token: token},
+			"login successful",
+			reqID,
+		)
+	}
+}
+
+===== FILE: ./api/hosts.go =====
+package api
+
+import (
+	"encoding/json"
+	"net"
+	"net/http"
+	"strings"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+func HostsHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		agents, err := st.ListAgents(r.Context(), tenantID)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(agents)
+	}
+}
+
+func HostSummaryHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		data, err := st.GetLatestHostMetrics(r.Context(), tenantID)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(data)
+	}
+}
+
+func extractPublicIP(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		return strings.TrimSpace(parts[0])
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
+}
+
+===== FILE: ./api/agent.go =====
+package api
+
+import (
+	"context"
+	"net/http"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/shared"
+)
+
+type AgentRegistrar interface {
+	UpsertAgentMetadata(ctx context.Context, m shared.HostMetrics) error
+}
+
+func RegisterAgentHandler(st AgentRegistrar) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		var a shared.AgentInfo
+		if err := utils.DecodeJSONStrict(r, &a); err != nil {
+			utils.WriteError(w, 400, "invalid_json", err.Error(), reqID)
+			return
+		}
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		// 🔄 Convert AgentInfo → HostMetrics (minimal fields)
+		m := shared.HostMetrics{
+			TenantID:   tenantID,
+			AgentID:    a.AgentID,
+			Hostname:   a.Hostname,
+			PrivateIP:  a.PrivateIP,
+			PublicIP:   a.PublicIP,
+			RemoteIP:   extractPublicIP(r),
+			K8sNodeIP:  a.K8sNodeIP,
+			OS:         a.OS,
+			Version:    a.Version,
+			Tags:       a.Tags,
+			SystemTags: a.SystemTags,
+		}
+
+		if err := st.UpsertAgentMetadata(r.Context(), m); err != nil {
+			utils.WriteError(w, 500, "internal_error", err.Error(), reqID)
+			return
+		}
+
+		utils.WriteSuccess(w, http.StatusOK, nil, "registered", reqID)
+	}
+}
+
+===== FILE: ./api/container_query.go =====
+package api
+
+import (
+	"net/http"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+)
+
+func ContainerMetricsQueryHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		agentID := r.URL.Query().Get("agent_id")
+		if agentID == "" {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "agent_id is required", reqID)
+			return
+		}
+
+		metrics, err := st.FetchContainerMetrics(r.Context(), tenantID, agentID)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", err.Error(), reqID)
+			return
+		}
+
+		utils.WriteJSON(w, http.StatusOK, metrics)
+	}
+}
+
+===== FILE: ./api/logs.go =====
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"time"
+
+	"go.uber.org/zap"
+
+	"opslense-pulse/server/logger"
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
+	"opslense-pulse/shared"
+)
+
+/*
+POST /api/logs
+*/
+func LogsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		var batch shared.LogBatch
+		if err := utils.DecodeJSONStrict(r, &batch); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_json", err.Error(), reqID)
+			return
+		}
+
+		if err := validation.ValidateLogBatch(&batch); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "validation_error", err.Error(), reqID)
+			return
+		}
+
+		if len(batch.Logs) > 5000 {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				"log batch too large (max 5000)",
+				reqID,
+			)
+			return
+		}
+		batch.TenantID = tenantID
+
+		log := middleware.GetLogger(r.Context())
+		log.Info("inserting logs",
+			zap.String("tenant_id", batch.TenantID),
+			zap.String("agent_id", batch.AgentID),
+			zap.String("hostname", batch.Hostname),
+			zap.Int("count", len(batch.Logs)),
+		)
+
+		if err := store.InsertLogs(r.Context(), batch); err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+/*
+GET /api/logs/fetch
+*/
+func FetchLogsHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		agentID := r.URL.Query().Get("agent_id")
+		hostname := r.URL.Query().Get("hostname")
+		level := r.URL.Query().Get("level")
+		source := r.URL.Query().Get("source")
+		sourceType := r.URL.Query().Get("source_type")
+
+		var start, end time.Time
+
+		if v := r.URL.Query().Get("start"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+				start = time.Unix(ts, 0)
+			}
+		}
+
+		if v := r.URL.Query().Get("end"); v != "" {
+			if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+				end = time.Unix(ts, 0)
+			}
+		}
+
+		limit := 100
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				limit = n
+			}
+		}
+
+		logs, err := s.GetLogs(
+			r.Context(),
+			tenantID,
+			hostname,
+			agentID,
+			start,
+			end,
+			level,
+			source,
+			sourceType,
+			limit,
+		)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(logs)
+	}
+}
+
+func LogSourcesHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		agentID := r.URL.Query().Get("agent_id")
+
+		out, err := s.GetLogSources(r.Context(), tenantID, agentID)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	}
+}
+
+func SearchLogs(chStore *store.ClickHouseStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		if r.Method != http.MethodPost {
+			utils.WriteError(w, http.StatusMethodNotAllowed, "method_not_allowed", "POST required", reqID)
+			return
+		}
+
+		var req shared.LogSearchRequest
+		if err := utils.DecodeJSONStrict(r, &req); err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_json", err.Error(), reqID)
+			return
+		}
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		results, err := chStore.SearchLogs(r.Context(), tenantID, req)
+		if err != nil {
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "query failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(results)
+	})
+}
+
+func LogsTimelineHandler(s store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(w, http.StatusUnauthorized, "unauthorized", "tenant missing", reqID)
+			return
+		}
+
+		fromStr := r.URL.Query().Get("from")
+		toStr := r.URL.Query().Get("to")
+		agentID := r.URL.Query().Get("agent_id")
+		sourceType := r.URL.Query().Get("source_type")
+
+		from, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid from timestamp", reqID)
+			return
+		}
+
+		to, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			utils.WriteError(w, http.StatusBadRequest, "invalid_request", "invalid to timestamp", reqID)
+			return
+		}
+		if to.Sub(from) > 30*24*time.Hour {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_request",
+				"time range too large (max 30 days)",
+				reqID,
+			)
+			return
+		}
+		result, err := s.GetLogsTimeline(
+			r.Context(),
+			tenantID,
+			agentID,
+			sourceType,
+			from,
+			to,
+		)
+
+		if err != nil {
+			logger.Log.Error("timeline query failed",
+				zap.String("tenant_id", tenantID),
+				zap.Error(err),
+			)
+			utils.WriteError(w, http.StatusInternalServerError, "internal_error", "operation failed", reqID)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(result)
+	}
+}
+
+===== FILE: ./api/container.go =====
+package api
+
+import (
+	"net/http"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
+	"opslense-pulse/shared"
+)
+
+func ContainerMetricsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
+			return
+		}
+
+		var metrics shared.ContainerMetrics
+		if err := utils.DecodeJSONStrict(r, &metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		if err := validation.ValidateContainerMetrics(&metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		// 🔒 Enforce tenant from auth
+		metrics.TenantID = tenantID
+
+		if metrics.ContainerID == "" {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				"container_id is required",
+				reqID,
+			)
+			return
+		}
+
+		if err := store.SaveContainerMetrics(r.Context(), metrics); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+func ContainerLogsHandler(store store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
+			return
+		}
+
+		var batch shared.ContainerLogBatch
+		if err := utils.DecodeJSONStrict(r, &batch); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		if len(batch.Logs) > 5000 {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				"log batch too large (max 5000)",
+				reqID,
+			)
+			return
+		}
+
+		// 🔒 Enforce tenant from auth
+		batch.TenantID = tenantID
+
+		if err := store.InsertContainerLogs(r.Context(), batch); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./api/tenants.go =====
+package api
+
+import (
+	"database/sql"
+	"encoding/json"
+	"net/http"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/utils"
+)
+
+func MyTenantsHandler(db *sql.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		userID, ok := r.Context().Value(middleware.CtxUserID).(string)
+		if !ok || userID == "" {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				"user id not found in context",
+				reqID,
+			)
+			return
+		}
+
+		rows, err := db.Query(`
+			SELECT DISTINCT t.id, t.name, t.slug
+			FROM tenants t
+			JOIN user_tenants ut ON ut.tenant_id = t.id
+			WHERE ut.user_id = $1
+			  AND t.is_active = true
+		`, userID)
+		if err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+		defer rows.Close()
+
+		type Tenant struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+			Slug string `json:"slug"`
+		}
+
+		var tenants []Tenant
+
+		for rows.Next() {
+			var t Tenant
+			if err := rows.Scan(&t.ID, &t.Name, &t.Slug); err == nil {
+				tenants = append(tenants, t)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(tenants)
+	}
+}
+
+===== FILE: ./api/heartbeat.go =====
+package api
+
+import (
+	"net/http"
+	"time"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/server/validation"
+	"opslense-pulse/shared"
+)
+
+func HeartbeatHandler(st store.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		reqID := middleware.GetRequestID(r.Context())
+
+		tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+		if !ok || tenantID == "" {
+			utils.WriteError(
+				w,
+				http.StatusUnauthorized,
+				"unauthorized",
+				"tenant missing",
+				reqID,
+			)
+			return
+		}
+
+		var hb shared.Heartbeat
+		if err := utils.DecodeJSONStrict(r, &hb); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"invalid_json",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		if err := validation.ValidateHeartbeat(&hb); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		// 🔒 Enforce tenant from auth
+		hb.TenantID = tenantID
+
+		if hb.Timestamp == 0 {
+			hb.Timestamp = time.Now().Unix()
+		}
+
+		if err := st.UpsertAgentHeartbeat(r.Context(), hb); err != nil {
+			utils.WriteError(
+				w,
+				http.StatusInternalServerError,
+				"internal_error",
+				err.Error(),
+				reqID,
+			)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}
+}
+
+===== FILE: ./handlers/logs.go =====
+package handlers
+
+import (
+	"net/http"
+
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/shared"
+)
+
+type Handler struct {
+	Store *store.ClickHouseStore
+}
+
+func (h *Handler) SearchLogs(w http.ResponseWriter, r *http.Request) {
+
+	reqID := middleware.GetRequestID(r.Context())
+
+	var req shared.LogSearchRequest
+	if err := utils.DecodeJSONStrict(r, &req); err != nil {
+		utils.WriteError(
+			w,
+			http.StatusBadRequest,
+			"invalid_json",
+			"invalid payload",
+			reqID,
+		)
+		return
+	}
+
+	tenantID, ok := r.Context().Value(middleware.CtxTenantID).(string)
+	if !ok || tenantID == "" {
+		utils.WriteError(
+			w,
+			http.StatusUnauthorized,
+			"unauthorized",
+			"tenant missing",
+			reqID,
+		)
+		return
+	}
+
+	logs, err := h.Store.SearchLogs(r.Context(), tenantID, req)
+	if err != nil {
+		utils.WriteError(
+			w,
+			http.StatusInternalServerError,
+			"internal_error",
+			"query failed",
+			reqID,
+		)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	utils.WriteJSON(w, http.StatusOK, logs)
+}
+
+===== FILE: ./main.go =====
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"opslense-pulse/server/api"
+	"opslense-pulse/server/auth"
+	"opslense-pulse/server/config"
+	"opslense-pulse/server/db"
+	"opslense-pulse/server/handlers"
+	"opslense-pulse/server/logger"
+	"opslense-pulse/server/middleware"
+	"opslense-pulse/server/store"
+	"opslense-pulse/server/utils"
+	"opslense-pulse/shared"
+)
+
+const ServerVersion = "1.0.0"
+
+func main() {
+
+	// ---------------- Logger ----------------
+	if err := logger.Init(); err != nil {
+		panic(err)
+	}
+	defer logger.Sync()
+
+	logger.Log.Info("server starting",
+		zap.String("version", ServerVersion),
+	)
+
+	// ---------------- CLI ----------------
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "Path to config file")
+	showVersion := flag.Bool("version", false, "Version")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println(ServerVersion)
+		return
+	}
+
+	// ---------------- Load Config ----------------
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		logger.Log.Fatal("config load failed", zap.Error(err))
+	}
+
+	logger.Log.Info("config loaded",
+		zap.Int("listen_port", cfg.Server.ListenPort),
+	)
+
+	chDB, err := db.NewClickHouse(cfg.ClickHouse)
+	if err != nil {
+		logger.Log.Fatal("clickhouse connection failed", zap.Error(err))
+	}
+
+	chStore := store.NewClickHouseStore(chDB)
+	chStore.StartHealthMonitor()
+	logger.Log.Info("connected to clickhouse")
+
+	// ---------------- Postgres ----------------
+	pg, err := db.NewPostgres(cfg.Postgres)
+	if err != nil {
+		logger.Log.Fatal("postgres connection failed", zap.Error(err))
+	}
+
+	logger.Log.Info("connected to postgres")
+
+	// ---------------- Health Check ----------------
+	if err := checkDBHealth("clickhouse", chStore.DB()); err != nil {
+		logger.Log.Fatal("clickhouse unhealthy")
+	}
+	if err := checkDBHealth("postgres", pg); err != nil {
+		logger.Log.Fatal("postgres unhealthy")
+	}
+
+	logger.Log.Info("startup summary",
+		zap.String("version", ServerVersion),
+		zap.Int("listen_port", cfg.Server.ListenPort),
+		zap.String("postgres_host", cfg.Postgres.Host),
+		zap.String("clickhouse_host", cfg.ClickHouse.Host),
+		zap.Int("pg_max_open", cfg.Postgres.MaxOpenConns),
+		zap.Int("ch_max_open", cfg.ClickHouse.MaxOpenConns),
+		zap.Int("rate_limit_requests", cfg.Server.RateLimit.Requests),
+		zap.Int("rate_limit_window_sec", cfg.Server.RateLimit.WindowSec),
+	)
+
+	// ---------------- Bootstrap API Key ----------------
+	pgStore := store.NewPostgresStore(pg)
+	if err := bootstrapAPIKeyIfNeeded(pgStore, pg); err != nil {
+		logger.Log.Fatal("bootstrap api key failed", zap.Error(err))
+	}
+
+	// ---------------- JWT ----------------
+	jwtManager := auth.NewJWTManager(
+		cfg.Security.JWTSecret,
+		cfg.Security.JWTIssuer,
+		cfg.Security.JWTAudience,
+	)
+
+	// ---------------- Router ----------------
+	mux := http.NewServeMux()
+
+	// -------- Agent APIs --------
+	mux.Handle("/api/metrics",
+		middleware.AgentAuth(pgStore)(api.MetricsHandler(chStore)))
+
+	mux.Handle("/api/heartbeat",
+		middleware.AgentAuth(pgStore)(api.HeartbeatHandler(chStore)))
+
+	mux.Handle("/api/logs",
+		middleware.AgentAuth(pgStore)(api.LogsHandler(chStore)))
+
+	mux.Handle("/api/container/metrics",
+		middleware.AgentAuth(pgStore)(api.ContainerMetricsHandler(chStore)))
+
+	// -------- Audit APIs --------
+	mux.Handle("/api/audit",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("audit.read", pgStore)(
+				api.AuditLogsHandler(pgStore),
+			),
+		),
+	)
+
+	// -------- User APIs --------
+	mux.Handle("/api/tenants",
+		middleware.UserAuth(jwtManager, pg)(
+			api.MyTenantsHandler(pg),
+		),
+	)
+
+	mux.Handle("/api/hosts",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("hosts.read", pgStore)(
+				api.HostsHandler(chStore),
+			),
+		),
+	)
+
+	mux.Handle("/api/hosts/summary",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("hosts.read", pgStore)(
+				api.HostSummaryHandler(chStore),
+			),
+		),
+	)
+
+	mux.Handle("/api/containers/metrics",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("hosts.read", pgStore)(
+				api.ContainerMetricsQueryHandler(chStore),
+			),
+		),
+	)
+
+	mux.Handle("/api/logs/fetch",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("logs.read", pgStore)(
+				api.FetchLogsHandler(chStore),
+			),
+		),
+	)
+
+	mux.Handle("/api/container/logs",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("logs.read", pgStore)(
+				api.ContainerLogsHandler(chStore),
+			),
+		),
+	)
+
+	logHandler := &handlers.Handler{Store: chStore}
+
+	mux.Handle("/api/logs/search",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("logs.read", pgStore)(
+				http.HandlerFunc(logHandler.SearchLogs),
+			),
+		),
+	)
+
+	mux.Handle("/api/logs/timeline",
+		middleware.UserAuth(jwtManager, pg)(
+			middleware.RequirePermission("logs.read", pgStore)(
+				api.LogsTimelineHandler(chStore),
+			),
+		),
+	)
+
+	// -------- Agent Registration --------
+	mux.Handle("/api/agents/register",
+		middleware.AgentAuth(pgStore)(
+			api.RegisterAgentHandler(chStore),
+		),
+	)
+	// -------- Public --------
+	mux.Handle("/api/login", api.LoginHandler(pg, jwtManager, pgStore))
+
+	// -------- Health --------
+	mux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"status":  "alive",
+			"version": ServerVersion,
+		})
+	})
+
+	mux.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
+
+		status := "ready"
+		httpStatus := http.StatusOK
+
+		if err := pg.PingContext(r.Context()); err != nil {
+			status = "not_ready"
+			httpStatus = http.StatusServiceUnavailable
+		}
+
+		if err := chStore.DB().PingContext(r.Context()); err != nil {
+			status = "not_ready"
+			httpStatus = http.StatusServiceUnavailable
+		}
+
+		utils.WriteJSON(w, httpStatus, map[string]interface{}{
+			"status":  status,
+			"version": ServerVersion,
+		})
+	})
+
+	// -------- UI --------
+	uiPath := "./ui/dist"
+
+	// Serve static assets (JS/CSS)
+	mux.Handle("/assets/",
+		http.StripPrefix("/assets/",
+			http.FileServer(http.Dir(filepath.Join(uiPath, "assets"))),
+		),
+	)
+
+	// Serve favicon
+	mux.Handle("/favicon.ico",
+		http.FileServer(http.Dir(uiPath)),
+	)
+
+	// SPA fallback
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+		// Block API routes
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
+		filePath := filepath.Join(uiPath, r.URL.Path)
+
+		// If file exists, serve it
+		if _, err := os.Stat(filePath); err == nil {
+			http.ServeFile(w, r, filePath)
+			return
+		}
+
+		// Otherwise serve index.html (React Router support)
+		http.ServeFile(w, r, filepath.Join(uiPath, "index.html"))
+	})
+
+	// ---------------- HTTP Server ----------------
+	addr := fmt.Sprintf(":%d", cfg.Server.ListenPort)
+
+	handler := middleware.Recovery(
+		middleware.RequestID(
+			middleware.RateLimit(
+				cfg.Server.RateLimit.Requests,
+				time.Duration(cfg.Server.RateLimit.WindowSec)*time.Second,
+			)(
+				limitBody(mux, cfg.Security.MaxBodyMB),
+			),
+		),
+	)
+
+	srv := &http.Server{
+		Addr:           addr,
+		Handler:        handler,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: cfg.Server.MaxHeaderBytes,
+	}
+
+	go func() {
+		logger.Log.Info("server listening", zap.String("address", addr))
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Fatal("server error", zap.Error(err))
+		}
+	}()
+
+	// ---------------- Graceful Shutdown ----------------
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	logger.Log.Info("shutting down")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_ = srv.Shutdown(ctx)
+	_ = chDB.Close()
+	_ = pg.Close()
+
+	logger.Log.Info("server stopped")
+}
+
+func checkDBHealth(name string, db *sql.DB) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		logger.Log.Error("database health check failed",
+			zap.String("database", name),
+			zap.Error(err),
+		)
+		return err
+	}
+
+	logger.Log.Info("database healthy",
+		zap.String("database", name),
+	)
+
+	return nil
+}
+
+func bootstrapAPIKeyIfNeeded(s *store.PostgresStore, db *sql.DB) error {
+
+	count, err := s.CountAPIKeys()
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	var tenantID string
+	err = db.QueryRow(`SELECT id FROM tenants WHERE slug = 'default-tenant'`).Scan(&tenantID)
+	if err != nil {
+		return err
+	}
+
+	rawKey := generateAPIKey()
+	hash := store.HashAPIKey(rawKey)
+
+	err = s.InsertAPIKey(shared.APIKey{
+		TenantID: tenantID,
+		KeyID:    uuid.NewString(),
+		KeyHash:  hash,
+		Name:     "bootstrap-admin",
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("========================================")
+	fmt.Println(" OpsLens Pulse – Bootstrap API Key")
+	fmt.Println(" THIS KEY IS SHOWN ONLY ONCE")
+	fmt.Println(" API KEY:", rawKey)
+	fmt.Println("========================================")
+
+	return nil
+}
+
+func generateAPIKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return "opl_" + hex.EncodeToString(b)
+}
+
+func limitBody(next http.Handler, maxMB int) http.Handler {
+	if maxMB <= 0 {
+		maxMB = 10
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(maxMB)<<20)
+		next.ServeHTTP(w, r)
+	})
+}
+
+===== FILE: ./validation/metrics.go =====
+package validation
+
+import (
+	"errors"
+	"strings"
+
+	"opslense-pulse/shared"
+)
+
+func ValidateHostMetrics(m *shared.HostMetrics) error {
+	if strings.TrimSpace(m.AgentID) == "" {
+		return errors.New("agent_id is required")
+	}
+
+	if strings.TrimSpace(m.Hostname) == "" {
+		return errors.New("hostname is required")
+	}
+
+	if m.CPUPercent < 0 || m.CPUPercent > 100 {
+		return errors.New("cpu_percent must be between 0 and 100")
+	}
+
+	if m.MemTotalMB <= 0 {
+		return errors.New("mem_total_mb must be positive")
+	}
+
+	return nil
+}
+
+===== FILE: ./validation/logs.go =====
+package validation
+
+import (
+	"errors"
+	"strings"
+
+	"opslense-pulse/shared"
+)
+
+func ValidateLogBatch(b *shared.LogBatch) error {
+	if strings.TrimSpace(b.AgentID) == "" {
+		return errors.New("agent_id is required")
+	}
+
+	if len(b.Logs) == 0 {
+		return errors.New("logs array cannot be empty")
+	}
+
+	return nil
+}
+
+===== FILE: ./validation/container.go =====
+package validation
+
+import (
+	"errors"
+	"strings"
+
+	"opslense-pulse/shared"
+)
+
+func ValidateContainerMetrics(m *shared.ContainerMetrics) error {
+	if strings.TrimSpace(m.AgentID) == "" {
+		return errors.New("agent_id is required")
+	}
+
+	if strings.TrimSpace(m.ContainerID) == "" {
+		return errors.New("container_id is required")
+	}
+
+	if strings.TrimSpace(m.ContainerName) == "" {
+		return errors.New("container_name is required")
+	}
+
+	return nil
+}
+
+===== FILE: ./validation/heartbeat.go =====
+package validation
+
+import (
+	"errors"
+	"strings"
+
+	"opslense-pulse/shared"
+)
+
+func ValidateHeartbeat(h *shared.Heartbeat) error {
+	if strings.TrimSpace(h.AgentID) == "" {
+		return errors.New("agent_id is required")
+	}
+
+	if strings.TrimSpace(h.Hostname) == "" {
+		return errors.New("hostname is required")
+	}
+
+	return nil
+}
+
+===== FILE: ./store/clickhouse_read.go =====
+package store
+
+import (
+	"context"
+	"encoding/json"
+	"opslense-pulse/shared"
+	"time"
+)
+
+////////////////////////////////////////////////////////////
+// GetLogs
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) GetLogs(
+	ctx context.Context,
+	tenantID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	source string,
+	sourceType string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	query := `
+		SELECT
+			agent_id,
+			hostname,
+			source_name,
+			source_type,
+			ts,
+			level,
+			message
+		FROM logs
+		WHERE tenant_id = ?
+	`
+
+	args := []any{tenantID}
+
+	if source != "" {
+		query += " AND source_name = ?"
+		args = append(args, source)
+	}
+
+	if sourceType != "" {
+		query += " AND source_type = ?"
+		args = append(args, sourceType)
+	}
+
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+
+	if hostname != "" {
+		query += " AND hostname = ?"
+		args = append(args, hostname)
+	}
+
+	if !from.IsZero() {
+		query += " AND ts >= ?"
+		args = append(args, from)
+	}
+
+	if !to.IsZero() {
+		query += " AND ts <= ?"
+		args = append(args, to)
+	}
+
+	if level != "" {
+		query += " AND level = ?"
+		args = append(args, level)
+	}
+
+	query += " ORDER BY ts DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []shared.LogEntry
+
+	for rows.Next() {
+		var le shared.LogEntry
+		var ts time.Time
+
+		if err := rows.Scan(
+			&le.AgentID,
+			&le.Hostname,
+			&le.SourceName,
+			&le.SourceType,
+			&ts,
+			&le.Level,
+			&le.Message,
+		); err != nil {
+			return nil, err
+		}
+
+		le.TenantID = tenantID
+		le.Timestamp = ts.Unix()
+		le.HumanTime = ts.Format("2006-01-02 15:04:05")
+
+		logs = append(logs, le)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return logs, nil
+}
+
+////////////////////////////////////////////////////////////
+// ListAgents
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) ListAgents(
+	ctx context.Context,
+	tenantID string,
+) ([]shared.AgentInfo, error) {
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT
+			a.tenant_id,
+			a.agent_id,
+			any(a.hostname) AS hostname,
+			any(a.private_ip) AS private_ip,
+			any(a.public_ip) AS public_ip,
+			any(a.remote_ip) AS remote_ip,
+			any(a.k8s_node_ip) AS k8s_node_ip,
+			any(a.os) AS os,
+			any(a.version) AS version,
+			any(a.environment) AS environment,
+			any(a.tags) AS tags,
+			min(a.first_seen) AS first_seen,
+			max(h.last_seen) AS last_seen
+		FROM agents a
+		LEFT JOIN agent_heartbeats h
+		  ON a.tenant_id = h.tenant_id
+		 AND a.agent_id = h.agent_id
+		WHERE a.tenant_id = ?
+		GROUP BY a.tenant_id, a.agent_id
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []shared.AgentInfo
+
+	for rows.Next() {
+		var ai shared.AgentInfo
+		var tagsJSON string
+
+		if err := rows.Scan(
+			&ai.TenantID,
+			&ai.AgentID,
+			&ai.Hostname,
+			&ai.PrivateIP,
+			&ai.PublicIP,
+			&ai.RemoteIP,
+			&ai.K8sNodeIP,
+			&ai.OS,
+			&ai.Version,
+			&ai.Environment,
+			&tagsJSON,
+			&ai.FirstSeen,
+			&ai.LastSeen,
+		); err != nil {
+			return nil, err
+		}
+
+		_ = json.Unmarshal([]byte(tagsJSON), &ai.Tags)
+
+		if !ai.LastSeen.IsZero() {
+			ai.Alive = time.Since(ai.LastSeen) <= 10*time.Second
+		}
+
+		result = append(result, ai)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+////////////////////////////////////////////////////////////
+// GetLatestHostMetrics
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) GetLatestHostMetrics(
+	ctx context.Context,
+	tenantID string,
+) (map[string]shared.HostMetrics, error) {
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT
+			agent_id,
+			argMax(hostname, timestamp),
+			argMax(cpu_percent, timestamp),
+			argMax(mem_used_mb, timestamp),
+			argMax(mem_total_mb, timestamp),
+			argMax(uptime_sec, timestamp)
+		FROM host_metrics
+		WHERE tenant_id = ?
+		GROUP BY agent_id
+	`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]shared.HostMetrics)
+
+	for rows.Next() {
+		var m shared.HostMetrics
+
+		if err := rows.Scan(
+			&m.AgentID,
+			&m.Hostname,
+			&m.CPUPercent,
+			&m.MemUsedMB,
+			&m.MemTotalMB,
+			&m.UptimeSec,
+		); err != nil {
+			return nil, err
+		}
+
+		out[m.AgentID] = m
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+////////////////////////////////////////////////////////////
+// GetLogSources
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) GetLogSources(
+	ctx context.Context,
+	tenantID, agentID string,
+) ([]string, error) {
+
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT DISTINCT JSONExtractString(tags, 'source')
+		FROM logs
+		WHERE tenant_id = ?
+		  AND agent_id = ?
+		  AND JSONHas(tags, 'source')
+	`, tenantID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sources []string
+
+	for rows.Next() {
+		var src string
+		if err := rows.Scan(&src); err == nil && src != "" {
+			sources = append(sources, src)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return sources, nil
+}
+
+////////////////////////////////////////////////////////////
+// SearchLogs (Unified View)
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) SearchLogs(
+	ctx context.Context,
+	tenantID string,
+	req shared.LogSearchRequest,
+) ([]map[string]interface{}, error) {
+
+	fromTime, err := time.Parse(time.RFC3339, req.From)
+	if err != nil {
+		return nil, err
+	}
+
+	toTime, err := time.Parse(time.RFC3339, req.To)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.Limit <= 0 || req.Limit > 1000 {
+		req.Limit = 500
+	}
+
+	query := `
+		SELECT tenant_id, agent_id, source_name, source_type,
+		       ts, level, message
+		FROM unified_logs
+		WHERE tenant_id = ?
+		  AND ts BETWEEN ? AND ?
+	`
+
+	args := []any{tenantID, fromTime, toTime}
+
+	if req.Level != "" {
+		query += " AND level = ?"
+		args = append(args, req.Level)
+	}
+
+	if req.Source != "" {
+		query += " AND source_name = ?"
+		args = append(args, req.Source)
+	}
+
+	if req.Query != "" {
+		query += " AND positionCaseInsensitive(message, ?) > 0"
+		args = append(args, req.Query)
+	}
+
+	query += " ORDER BY ts DESC"
+
+	if req.Limit > 0 {
+		query += " LIMIT ? OFFSET ?"
+		args = append(args, req.Limit, req.Offset)
+	} else {
+		query += " LIMIT 500"
+	}
+
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+
+	for rows.Next() {
+		var tid, agentID, sourceName, sourceType string
+		var ts time.Time
+		var level, message string
+
+		if err := rows.Scan(
+			&tid,
+			&agentID,
+			&sourceName,
+			&sourceType,
+			&ts,
+			&level,
+			&message,
+		); err != nil {
+			return nil, err
+		}
+
+		results = append(results, map[string]interface{}{
+			"tenant_id":   tid,
+			"agent_id":    agentID,
+			"source_name": sourceName,
+			"source_type": sourceType,
+			"ts":          ts.Unix(),
+			"level":       level,
+			"message":     message,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+func (c *ClickHouseStore) GetLogsTimeline(
+	ctx context.Context,
+	tenantID string,
+	agentID string,
+	sourceType string,
+	from, to time.Time,
+) (TimelineResult, error) {
+
+	query := `
+		SELECT
+			bucket,
+			source_type,
+			total,
+			errors,
+			warnings,
+			if(total = 0,
+			   0,
+			   toFloat64(errors) / toFloat64(total)
+			) AS error_rate
+		FROM
+		(
+			SELECT
+				bucket,
+				source_type,
+				sum(total)    AS total,
+				sum(errors)   AS errors,
+				sum(warnings) AS warnings
+			FROM logs_minute_agg
+			WHERE tenant_id = ?
+			  AND bucket >= ?
+			  AND bucket <= ?
+	`
+
+	args := []any{tenantID, from, to}
+
+	if agentID != "" {
+		query += " AND agent_id = ?"
+		args = append(args, agentID)
+	}
+
+	if sourceType != "" {
+		query += " AND source_type = ?"
+		args = append(args, sourceType)
+	}
+
+	query += `
+			GROUP BY bucket, agent_id, source_type
+		)
+		ORDER BY bucket ASC
+	`
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return TimelineResult{}, err
+	}
+	defer rows.Close()
+
+	var points []TimelinePoint
+
+	for rows.Next() {
+		var p TimelinePoint
+
+		if err := rows.Scan(
+			&p.Bucket,
+			&p.SourceType,
+			&p.Total,
+			&p.Errors,
+			&p.Warnings,
+			&p.ErrorRate,
+		); err != nil {
+			return TimelineResult{}, err
+		}
+
+		points = append(points, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return TimelineResult{}, err
+	}
+
+	anomaly := DetectZScore(points)
+
+	return TimelineResult{
+		Points:  points,
+		Anomaly: anomaly,
+	}, nil
+}
+
+func (c *ClickHouseStore) FetchContainerMetrics(
+	ctx context.Context,
+	tenantID string,
+	agentID string,
+) ([]shared.ContainerMetrics, error) {
+
+	query := `
+		SELECT
+			container_id,
+			hostname,
+			image,
+			status,
+			cpu_percent,
+			mem_used_mb,
+			mem_total_mb,
+			ts
+		FROM container_metrics
+		WHERE tenant_id = ?
+		  AND agent_id = ?
+		ORDER BY ts DESC
+		LIMIT 100
+	`
+
+	rows, err := c.db.QueryContext(ctx, query, tenantID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []shared.ContainerMetrics
+
+	for rows.Next() {
+		var m shared.ContainerMetrics
+		if err := rows.Scan(
+			&m.ContainerID,
+			&m.Hostname,
+			&m.Image,
+			&m.Status,
+			&m.CPUPercent,
+			&m.MemUsedMB,
+			&m.MemTotalMB,
+			&m.Timestamp,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+
+	return result, nil
+}
+
+===== FILE: ./store/audit.go =====
+package store
+
+import (
+	"time"
+)
+
+type AuditLog struct {
+	ID           string
+	TenantID     string
+	UserID       *string
+	Action       string
+	ResourceType string
+	ResourceID   string
+	Status       string
+	IPAddress    string
+	UserAgent    string
+	Metadata     map[string]interface{}
+	CreatedAt    time.Time
+}
+
+===== FILE: ./store/types.go =====
+package store
+
+import "opslense-pulse/shared"
+
+type HostState struct {
+	IP       string
+	Metrics  shared.HostMetrics
+	Logs     []shared.LogEntry
+	LastSeen int64
+}
+
+===== FILE: ./store/memory_store.go =====
+package store
+
+import (
+	"context"
+	"opslense-pulse/shared"
+	"sync"
+	"time"
+)
+
+// -------------------------------
+// MemoryStore struct
+// -------------------------------
+type MemoryStore struct {
+	mu         sync.RWMutex
+	hosts      map[string]*HostState
+	apiKeys    map[string]shared.APIKey
+	containers map[string]*ContainerState
+}
+
+type ContainerState struct {
+	Metrics  shared.ContainerMetrics
+	Logs     []string
+	LastSeen time.Time
+}
+
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{
+		hosts:      make(map[string]*HostState),
+		apiKeys:    make(map[string]shared.APIKey),
+		containers: make(map[string]*ContainerState),
+	}
+}
+
+func (m *MemoryStore) SaveContainerMetrics(ctx context.Context, metrics shared.ContainerMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := metrics.Hostname + ":" + metrics.ContainerID
+	c, ok := m.containers[key]
+	if !ok {
+		c = &ContainerState{}
+		m.containers[key] = c
+	}
+	c.Metrics = metrics
+	c.LastSeen = time.Now()
+	return nil
+}
+
+func (m *MemoryStore) InsertContainerLogs(ctx context.Context, batch shared.ContainerLogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, l := range batch.Logs {
+		key := batch.Hostname + ":" + l.ContainerID
+		c, ok := m.containers[key]
+		if !ok {
+			c = &ContainerState{}
+			m.containers[key] = c
+		}
+
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		c.Logs = append(c.Logs, l.Message+" ["+t.Format("2006-01-02 15:04:05")+"]")
+		c.LastSeen = t
+	}
+	return nil
+}
+
+// -------------------------------
+// SaveMetrics: store host metrics
+// -------------------------------
+func (m *MemoryStore) SaveMetrics(ctx context.Context, metrics shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[metrics.AgentID]
+	if !ok {
+		h = &HostState{}
+		m.hosts[metrics.AgentID] = h
+	}
+
+	h.Metrics = metrics
+	h.LastSeen = time.Now().Unix()
+
+	if ip, ok := metrics.Tags["ip"]; ok {
+		h.IP = ip
+	}
+
+	return nil
+}
+
+// -------------------------------
+// Logs
+// -------------------------------
+func (m *MemoryStore) InsertLogs(ctx context.Context, batch shared.LogBatch) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[batch.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[batch.Hostname] = h
+	}
+
+	for _, l := range batch.Logs {
+		t := time.Now()
+		if l.Timestamp > 0 {
+			t = time.Unix(l.Timestamp, 0)
+		}
+		h.Logs = append(h.Logs, shared.LogEntry{
+			TenantID:  l.TenantID,
+			AgentID:   l.AgentID,
+			Hostname:  l.Hostname,
+			Level:     l.Level,
+			Message:   l.Message + " [" + t.Format("2006-01-02 15:04:05") + "]",
+			Timestamp: l.Timestamp,
+			Tags:      l.Tags,
+		})
+	}
+	return nil
+}
+
+// -------------------------------
+// Fetch logs
+// -------------------------------
+func (m *MemoryStore) GetLogs(
+	ctx context.Context,
+	TenantID string,
+	hostname string,
+	agentID string,
+	from, to time.Time,
+	level string,
+	source string,
+	source_type string,
+	limit int,
+) ([]shared.LogEntry, error) {
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []shared.LogEntry
+
+	for _, h := range m.hosts {
+		for _, l := range h.Logs {
+
+			if TenantID != "" && l.TenantID != TenantID {
+				continue
+			}
+			if agentID != "" && l.AgentID != agentID {
+				continue
+			}
+			if hostname != "" && l.Hostname != hostname {
+				continue
+			}
+			if level != "" && l.Level != level {
+				continue
+			}
+			if source != "" {
+				if src, ok := l.Tags["source"]; !ok || src != source {
+					continue
+				}
+			}
+
+			t := time.Unix(l.Timestamp, 0)
+			if !from.IsZero() && t.Before(from) {
+				continue
+			}
+			if !to.IsZero() && t.After(to) {
+				continue
+			}
+
+			out = append(out, l)
+
+			if limit > 0 && len(out) >= limit {
+				return out, nil
+			}
+		}
+	}
+
+	return out, nil
+}
+
+func (m *MemoryStore) GetLogSources(ctx context.Context, TenantID, agentID string) ([]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+
+	for _, h := range m.hosts {
+		for _, l := range h.Logs {
+			if l.TenantID != TenantID || l.AgentID != agentID {
+				continue
+			}
+			if src, ok := l.Tags["source"]; ok {
+				seen[src] = struct{}{}
+			}
+		}
+	}
+
+	var out []string
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// -------------------------------
+// API Keys
+// -------------------------------
+func (m *MemoryStore) CountAPIKeys() (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.apiKeys), nil
+}
+
+func (m *MemoryStore) InsertAPIKey(k shared.APIKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.apiKeys[k.KeyHash] = k
+	return nil
+}
+
+func (m *MemoryStore) ValidateAPIKey(rawKey string) (bool, string, error) {
+	hash := HashAPIKey(rawKey)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	k, ok := m.apiKeys[hash]
+	if !ok {
+		return false, "", nil
+	}
+	return true, k.TenantID, nil
+}
+
+func (m *MemoryStore) UpsertAgentHeartbeat(ctx context.Context, hb shared.Heartbeat) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h, ok := m.hosts[hb.Hostname]
+	if !ok {
+		h = &HostState{}
+		m.hosts[hb.Hostname] = h
+	}
+
+	if hb.Timestamp == 0 {
+		h.LastSeen = time.Now().Unix()
+	} else {
+		h.LastSeen = hb.Timestamp
+	}
+
+	return nil
+}
+
+func (m *MemoryStore) ListAgents(ctx context.Context, TenantID string) ([]shared.AgentInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var agents []shared.AgentInfo
+
+	for hostname, h := range m.hosts {
+		agents = append(agents, shared.AgentInfo{
+			TenantID: TenantID,
+			Hostname: hostname,
+			LastSeen: time.Unix(h.LastSeen, 0),
+		})
+	}
+
+	return agents, nil
+}
+
+func (m *MemoryStore) GetLatestHostMetrics(ctx context.Context, TenantID string) (map[string]shared.HostMetrics, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Memory store does not persist time-series metrics
+	// Return empty map so UI still works
+	return map[string]shared.HostMetrics{}, nil
+}
+
+func (m *MemoryStore) UpsertAgentMetadata(ctx context.Context, hm shared.HostMetrics) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	state, ok := m.hosts[hm.AgentID]
+	if !ok {
+		// first time we see this agent
+		state = &HostState{
+			Metrics:  hm,
+			LastSeen: time.Now().Unix(),
+		}
+		m.hosts[hm.AgentID] = state
+	} else {
+		// update metadata only
+		state.Metrics.Hostname = hm.Hostname
+		state.Metrics.PrivateIP = hm.PrivateIP
+		state.Metrics.PublicIP = hm.PublicIP
+		state.Metrics.K8sNodeIP = hm.K8sNodeIP
+		state.Metrics.OS = hm.OS
+		state.Metrics.Tags = hm.Tags
+	}
+
+	return nil
+}
+
+func (m *MemoryStore) GetLogsTimeline(
+	ctx context.Context,
+	tenantID string,
+	agentID string,
+	sourceType string,
+	from, to time.Time,
+) (TimelineResult, error) {
+
+	// Memory store does not persist timeline aggregation.
+	// Return empty result safely.
+
+	return TimelineResult{
+		Points:  []TimelinePoint{},
+		Anomaly: false,
+	}, nil
+}
+
+var _ Store = (*MemoryStore)(nil)
+
+===== FILE: ./store/api_key_validator.go =====
+package store
+
+type APIKeyValidator interface {
+	ValidateAPIKey(rawKey string) (bool, string, error)
+}
+
+===== FILE: ./store/clickhouse_helpers.go =====
+package store
+
+import (
+	"context"
+	"log"
+	"time"
+)
+
+const maxBatchSize = 2000
+const maxQueryLimit = 1000
+
+////////////////////////////////////////////////////////////
+// Helpers
+////////////////////////////////////////////////////////////
+
+func boolToUInt8(b bool) uint8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func resolveTimestamp(epoch int64) time.Time {
+	if epoch == 0 {
+		return time.Now()
+	}
+	if epoch > 1e12 {
+		return time.UnixMilli(epoch)
+	}
+	return time.Unix(epoch, 0)
+}
+
+func (c *ClickHouseStore) execWithRetry(
+	parentCtx context.Context,
+	query string,
+	args ...interface{},
+) error {
+
+	const maxRetries = 5
+	baseDelay := 500 * time.Millisecond
+	timeoutPerAttempt := 5 * time.Second
+
+	var err error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+
+		if parentCtx.Err() != nil {
+			return parentCtx.Err()
+		}
+
+		ctx, cancel := context.WithTimeout(parentCtx, timeoutPerAttempt)
+
+		_, err = c.db.ExecContext(ctx, query, args...)
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+
+		log.Printf("ClickHouse write failed (attempt %d/%d): %v",
+			attempt, maxRetries, err)
+
+		time.Sleep(baseDelay * time.Duration(attempt))
+	}
+
+	return err
+}
+
+func chunkLogs[T any](items []T, size int) [][]T {
+	if len(items) == 0 {
+		return nil
+	}
+	var chunks [][]T
+
+	for size < len(items) {
+		items, chunks = items[size:], append(chunks, items[0:size:size])
+	}
+
+	chunks = append(chunks, items)
+	return chunks
+}
+
+func (c *ClickHouseStore) StartHealthMonitor() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := c.db.PingContext(ctx)
+			cancel()
+
+			if err != nil {
+				c.health.Store(false)
+				log.Println("ClickHouse unhealthy:", err)
+			} else {
+				c.health.Store(true)
+			}
+		}
+	}()
+}
+
+===== FILE: ./store/permissions.go =====
+package store
+
+import (
+	"database/sql"
+)
+
+func LoadUserPermissions(db *sql.DB, userID string, tenantID string) (map[string]bool, error) {
+
+	rows, err := db.Query(`
+		SELECT DISTINCT p.name
+		FROM permissions p
+		JOIN role_permissions rp ON rp.permission_id = p.id
+		JOIN roles r ON r.id = rp.role_id
+		JOIN group_roles gr ON gr.role_id = r.id
+		JOIN user_groups ug ON ug.group_id = gr.group_id
+		WHERE ug.user_id = $1
+		  AND r.tenant_id = $2
+	`, userID, tenantID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	perms := make(map[string]bool)
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err == nil {
+			perms[name] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return perms, nil
+}
+
+===== FILE: ./store/anomaly.go =====
+package store
+
+import "math"
+
+func DetectZScore(points []TimelinePoint) bool {
+
+	if len(points) < 10 {
+		return false
+	}
+
+	window := 10
+	recent := points[len(points)-window:]
+
+	var sum float64
+	for _, p := range recent {
+		sum += float64(p.Total)
+	}
+
+	mean := sum / float64(len(recent))
+
+	var variance float64
+	for _, p := range recent {
+		diff := float64(p.Total) - mean
+		variance += diff * diff
+	}
+
+	stdDev := math.Sqrt(variance / float64(len(recent)))
+	if stdDev == 0 {
+		return false
+	}
+
+	last := float64(points[len(points)-1].Total)
+	zScore := (last - mean) / stdDev
+
+	return zScore > 3
+}
+
+===== FILE: ./store/utils.go =====
+package store
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
+func HashAPIKey(rawKey string) string {
+	sum := sha256.Sum256([]byte(rawKey))
+	return hex.EncodeToString(sum[:])
+}
+
+===== FILE: ./store/postgres_store.go =====
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"opslense-pulse/shared"
+
+	"github.com/google/uuid"
+)
+
+// -------------------------------
+// PostgresStore
+// -------------------------------
+type PostgresStore struct {
+	db *sql.DB
+}
+
+// -------------------------------
+// Constructor
+// -------------------------------
+func NewPostgresStore(db *sql.DB) *PostgresStore {
+	return &PostgresStore{db: db}
+}
+
+// -------------------------------
+// API Keys (Postgres)
+// -------------------------------
+
+// CountAPIKeys returns total active keys
+func (p *PostgresStore) CountAPIKeys() (int, error) {
+	var count int
+	err := p.db.QueryRow(`
+		SELECT COUNT(*) FROM api_keys
+		WHERE is_active = true
+	`).Scan(&count)
+
+	return count, err
+}
+
+// InsertAPIKey inserts new API key
+func (p *PostgresStore) InsertAPIKey(k shared.APIKey) error {
+
+	// tenant_id is UUID in Postgres
+	_, err := p.db.Exec(`
+		INSERT INTO api_keys
+		(id, tenant_id, name, key_hash, is_active, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`,
+		k.KeyID,
+		k.TenantID,
+		k.Name,
+		k.KeyHash,
+		true,
+		time.Now(),
+	)
+
+	return err
+}
+
+// ValidateAPIKey validates raw key and returns tenant_id
+func (p *PostgresStore) ValidateAPIKey(rawKey string) (bool, string, error) {
+
+	hash := HashAPIKey(rawKey)
+
+	var tenantID string
+	err := p.db.QueryRow(`
+		SELECT tenant_id
+		FROM api_keys
+		WHERE key_hash = $1
+		  AND is_active = true
+		LIMIT 1
+	`, hash).Scan(&tenantID)
+
+	if err == sql.ErrNoRows {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+
+	return true, tenantID, nil
+}
+
+func (p *PostgresStore) InsertAuditLog(ctx context.Context, log AuditLog) error {
+
+	metadataJSON, _ := json.Marshal(log.Metadata)
+
+	_, err := p.db.ExecContext(ctx, `
+		INSERT INTO audit_logs
+		(id, tenant_id, user_id, action,
+		 resource_type, resource_id,
+		 status, ip_address, user_agent,
+		 metadata, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+	`,
+		uuid.NewString(),
+		log.TenantID,
+		log.UserID,
+		log.Action,
+		log.ResourceType,
+		log.ResourceID,
+		log.Status,
+		log.IPAddress,
+		log.UserAgent,
+		metadataJSON,
+		time.Now(),
+	)
+
+	return err
+}
+
+func (p *PostgresStore) GetAuditLogs(
+	ctx context.Context,
+	tenantID string,
+	from, to time.Time,
+	userID string,
+	action string,
+	status string,
+	limit int,
+) ([]AuditLog, error) {
+
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	query := `
+		SELECT id, tenant_id, user_id,
+		       action, resource_type, resource_id,
+		       status, ip_address, user_agent,
+		       metadata, created_at
+		FROM audit_logs
+		WHERE tenant_id = $1
+		  AND created_at BETWEEN $2 AND $3
+	`
+
+	args := []interface{}{tenantID, from, to}
+	argPos := 4
+
+	if userID != "" {
+		query += fmt.Sprintf(" AND user_id = $%d", argPos)
+		args = append(args, userID)
+		argPos++
+	}
+
+	if action != "" {
+		query += fmt.Sprintf(" AND action = $%d", argPos)
+		args = append(args, action)
+		argPos++
+	}
+
+	if status != "" {
+		query += fmt.Sprintf(" AND status = $%d", argPos)
+		args = append(args, status)
+		argPos++
+	}
+
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", argPos)
+	args = append(args, limit)
+
+	rows, err := p.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var logs []AuditLog
+
+	for rows.Next() {
+		var l AuditLog
+		var metadataBytes []byte
+
+		err := rows.Scan(
+			&l.ID,
+			&l.TenantID,
+			&l.UserID,
+			&l.Action,
+			&l.ResourceType,
+			&l.ResourceID,
+			&l.Status,
+			&l.IPAddress,
+			&l.UserAgent,
+			&metadataBytes,
+			&l.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		_ = json.Unmarshal(metadataBytes, &l.Metadata)
+
+		logs = append(logs, l)
+	}
+
+	return logs, rows.Err()
+}
+
+===== FILE: ./store/clickhouse_write.go =====
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"opslense-pulse/shared"
+	"strings"
+)
+
+////////////////////////////////////////////////////////////
+// SaveMetrics
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) SaveMetrics(
+	ctx context.Context,
+	m shared.HostMetrics,
+) error {
+
+	ts := resolveTimestamp(m.Timestamp)
+	tagsJSON, err := json.Marshal(m.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+
+	// ---------------- host_metrics (single row) ----------------
+	if err := c.execWithRetry(ctx, `
+		INSERT INTO host_metrics
+		(tenant_id, agent_id, hostname, os, version,
+		 timestamp, cores,
+		 cpu_percent, cpu_critical, cpu_spike,
+		 mem_used_mb, mem_total_mb, mem_critical, mem_pressure,
+		 uptime_sec,
+		 private_ip, public_ip, remote_ip, k8s_node_ip,
+		 agent_cpu_percent, agent_mem_mb,
+		 agent_goroutines, agent_uptime_sec,
+		 metrics_failures, log_failures,
+		 tags)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.TenantID,
+		m.AgentID,
+		m.Hostname,
+		m.OS,
+		m.Version,
+		ts,
+		m.Cores,
+		m.CPUPercent,
+		boolToUInt8(m.CPUCritical),
+		boolToUInt8(m.CPUSpike),
+		m.MemUsedMB,
+		m.MemTotalMB,
+		boolToUInt8(m.MemCritical),
+		boolToUInt8(m.MemPressure),
+		m.UptimeSec,
+		m.PrivateIP,
+		m.PublicIP,
+		m.RemoteIP,
+		m.K8sNodeIP,
+		m.Agent.CPUPercent,
+		m.Agent.MemoryMB,
+		m.Agent.Goroutines,
+		m.Agent.UptimeSec,
+		m.Agent.MetricsFailures,
+		m.Agent.LogFailures,
+		string(tagsJSON),
+	); err != nil {
+		return err
+	}
+
+	// ---------------- host_disk_metrics ----------------
+	if len(m.Disks) > 0 {
+
+		diskChunks := chunkLogs(m.Disks, maxBatchSize)
+
+		for _, part := range diskChunks {
+
+			query := `
+				INSERT INTO host_disk_metrics
+				(tenant_id, agent_id, hostname,
+				 timestamp,
+				 mount_point, fs_type,
+				 total_mb, used_mb, used_pct,
+				 spike_detected, critical)
+				VALUES
+			`
+
+			valueStrings := make([]string, 0, len(part))
+			args := make([]interface{}, 0, len(part)*11)
+
+			for _, d := range part {
+
+				valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+				args = append(args,
+					m.TenantID,
+					m.AgentID,
+					m.Hostname,
+					ts,
+					d.MountPoint,
+					d.FSType,
+					d.TotalMB,
+					d.UsedMB,
+					d.UsedPct,
+					boolToUInt8(d.SpikeDetected),
+					boolToUInt8(d.Critical),
+				)
+			}
+
+			query += strings.Join(valueStrings, ",")
+
+			if err := c.execWithRetry(ctx, query, args...); err != nil {
+				return err
+			}
+		}
+	}
+
+	// ---------------- host_network_interfaces ----------------
+	if len(m.Network) > 0 {
+
+		netChunks := chunkLogs(m.Network, maxBatchSize)
+
+		for _, part := range netChunks {
+
+			query := `
+				INSERT INTO host_network_interfaces
+				(tenant_id, agent_id, hostname,
+				 timestamp,
+				 interface, in_bps, out_bps)
+				VALUES
+			`
+
+			valueStrings := make([]string, 0, len(part))
+			args := make([]interface{}, 0, len(part)*7)
+
+			for _, n := range part {
+
+				valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?)")
+
+				args = append(args,
+					m.TenantID,
+					m.AgentID,
+					m.Hostname,
+					ts,
+					n.Name,
+					n.InBps,
+					n.OutBps,
+				)
+			}
+
+			query += strings.Join(valueStrings, ",")
+
+			if err := c.execWithRetry(ctx, query, args...); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+////////////////////////////////////////////////////////////
+// InsertLogs (Host Logs)
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) InsertLogs(
+	ctx context.Context,
+	batch shared.LogBatch,
+) error {
+
+	if len(batch.Logs) == 0 {
+		return nil
+	}
+
+	chunks := chunkLogs(batch.Logs, maxBatchSize)
+
+	for _, part := range chunks {
+
+		query := `
+			INSERT INTO logs
+			(tenant_id, agent_id, hostname,
+			 source_name, source_type,
+			 ts, level, message, tags, ttl_days)
+			VALUES
+		`
+
+		valueStrings := make([]string, 0, len(part))
+		args := make([]interface{}, 0, len(part)*10)
+
+		for _, l := range part {
+
+			ts := resolveTimestamp(l.Timestamp)
+
+			level := l.Level
+			if level == "" {
+				level = "info"
+			}
+
+			sourceName := l.SourceName
+			if sourceName == "" {
+				sourceName = "unknown"
+			}
+
+			sourceType := l.SourceType
+			if sourceType == "" {
+				sourceType = "host"
+			}
+
+			tagsJSON, _ := json.Marshal(l.Tags)
+
+			ttl := l.TTLDays
+			if ttl == 0 {
+				ttl = 90
+			}
+
+			valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+			args = append(args,
+				batch.TenantID,
+				batch.AgentID,
+				batch.Hostname,
+				sourceName,
+				sourceType,
+				ts,
+				level,
+				l.Message,
+				string(tagsJSON),
+				ttl,
+			)
+		}
+
+		query += strings.Join(valueStrings, ",")
+
+		if err := c.execWithRetry(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+////////////////////////////////////////////////////////////
+// InsertContainerLogs
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) InsertContainerLogs(
+	ctx context.Context,
+	batch shared.ContainerLogBatch,
+) error {
+
+	if len(batch.Logs) == 0 {
+		return nil
+	}
+
+	chunks := chunkLogs(batch.Logs, maxBatchSize)
+
+	for _, part := range chunks {
+
+		query := `
+			INSERT INTO container_logs
+			(tenant_id, agent_id, container_id,
+			 name, ts, level, message, ttl_days)
+			VALUES
+		`
+
+		valueStrings := make([]string, 0, len(part))
+		args := make([]interface{}, 0, len(part)*8)
+
+		for _, l := range part {
+
+			ts := resolveTimestamp(l.Timestamp)
+
+			level := l.Level
+			if level == "" {
+				level = "info"
+			}
+
+			ttl := l.TTLDays
+			if ttl == 0 {
+				ttl = 90
+			}
+
+			valueStrings = append(valueStrings, "(?, ?, ?, ?, ?, ?, ?, ?)")
+
+			args = append(args,
+				batch.TenantID,
+				batch.AgentID,
+				l.ContainerID,
+				l.ContainerName,
+				ts,
+				level,
+				l.Message,
+				ttl,
+			)
+		}
+
+		query += strings.Join(valueStrings, ",")
+
+		if err := c.execWithRetry(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+////////////////////////////////////////////////////////////
+// SaveContainerMetrics
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) SaveContainerMetrics(
+	ctx context.Context,
+	m shared.ContainerMetrics,
+) error {
+
+	ts := resolveTimestamp(m.Timestamp)
+
+	ttl := m.TTLDays
+	if ttl == 0 {
+		ttl = 90
+	}
+
+	return c.execWithRetry(ctx, `
+		INSERT INTO container_metrics
+		(tenant_id, agent_id, hostname,
+		container_id, name, image, status,
+		cpu_percent, mem_used_mb, mem_total_mb,
+		ts, ttl_days)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		m.TenantID,
+		m.AgentID,
+		m.Hostname,
+		m.ContainerID,
+		m.ContainerName,
+		m.Image,
+		m.Status,
+		m.CPUPercent,
+		m.MemUsedMB,
+		m.MemTotalMB,
+		ts,
+		ttl,
+	)
+}
+
+////////////////////////////////////////////////////////////
+// UpsertAgentMetadata
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) UpsertAgentMetadata(
+	ctx context.Context,
+	m shared.HostMetrics,
+) error {
+
+	tagsJSON, _ := json.Marshal(m.Tags)
+
+	var exists int
+	err := c.db.QueryRowContext(ctx, `
+		SELECT 1
+		FROM agents
+		WHERE tenant_id = ? AND agent_id = ?
+		LIMIT 1
+	`,
+		m.TenantID,
+		m.AgentID,
+	).Scan(&exists)
+
+	if err == sql.ErrNoRows {
+
+		return c.execWithRetry(ctx, `
+			INSERT INTO agents
+			(tenant_id, agent_id, hostname,
+			private_ip, public_ip, remote_ip, k8s_node_ip,
+			os, version, environment, tags)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`,
+			m.TenantID,
+			m.AgentID,
+			m.Hostname,
+			m.PrivateIP,
+			m.PublicIP,
+			m.RemoteIP,
+			m.K8sNodeIP,
+			m.OS,
+			m.Version,
+			m.Tags["env"],
+			string(tagsJSON),
+		)
+	}
+
+	return err
+}
+
+////////////////////////////////////////////////////////////
+// UpsertAgentHeartbeat
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) UpsertAgentHeartbeat(
+	ctx context.Context,
+	hb shared.Heartbeat,
+) error {
+
+	ts := resolveTimestamp(hb.Timestamp)
+
+	return c.execWithRetry(ctx, `
+		INSERT INTO agent_heartbeats
+		(tenant_id, agent_id, last_seen)
+		VALUES (?, ?, ?)
+	`,
+		hb.TenantID,
+		hb.AgentID,
+		ts,
+	)
+}
+
+===== FILE: ./store/store_interface.go =====
+package store
+
+import (
+	"context"
+	"opslense-pulse/shared"
+	"time"
+)
+
+type TimelinePoint struct {
+	Bucket     time.Time `json:"bucket"`
+	Hostname   string    `json:"hostname"`
+	SourceType string    `json:"source_type"`
+	Total      uint64    `json:"total"`
+	Errors     uint64    `json:"errors"`
+	Warnings   uint64    `json:"warnings"`
+	ErrorRate  float64   `json:"error_rate"`
+}
+
+type TimelineResult struct {
+	Points  []TimelinePoint `json:"points"`
+	Anomaly bool            `json:"anomaly"`
+}
+
+type Store interface {
+	// Ingest
+	SaveMetrics(ctx context.Context, m shared.HostMetrics) error
+	InsertLogs(ctx context.Context, batch shared.LogBatch) error
+	SaveContainerMetrics(ctx context.Context, m shared.ContainerMetrics) error
+	InsertContainerLogs(ctx context.Context, batch shared.ContainerLogBatch) error
+	UpsertAgentHeartbeat(ctx context.Context, hb shared.Heartbeat) error
+	UpsertAgentMetadata(ctx context.Context, m shared.HostMetrics) error
+
+	// Query
+	ListAgents(ctx context.Context, tenantID string) ([]shared.AgentInfo, error)
+	GetLatestHostMetrics(ctx context.Context, tenantID string) (map[string]shared.HostMetrics, error)
+	GetLogs(
+		ctx context.Context,
+		tenantID string,
+		hostname string,
+		agentID string,
+		from, to time.Time,
+		level string,
+		source string,
+		source_type string,
+		limit int,
+	) ([]shared.LogEntry, error)
+	GetLogSources(ctx context.Context, tenantID, agentID string) ([]string, error)
+
+	GetLogsTimeline(
+		ctx context.Context,
+		tenantID string,
+		agentID string,
+		sourceType string,
+		from, to time.Time,
+	) (TimelineResult, error)
+}
+
+===== FILE: ./store/clickhouse_store.go =====
+package store
+
+import (
+	"database/sql"
+	"sync/atomic"
+
+	_ "github.com/ClickHouse/clickhouse-go/v2"
+)
+
+type ClickHouseStore struct {
+	db     *sql.DB
+	health atomic.Bool
+}
+
+func NewClickHouseStore(db *sql.DB) *ClickHouseStore {
+	return &ClickHouseStore{
+		db: db,
+	}
+}
+
+func (c *ClickHouseStore) DB() *sql.DB {
+	return c.db
+}
+
+////////////////////////////////////////////////////////////
+// Close
+////////////////////////////////////////////////////////////
+
+func (c *ClickHouseStore) Close() error {
+	return c.db.Close()
+}
+
+////////////////////////////////////////////////////////////
+// Interface Check
+////////////////////////////////////////////////////////////
+
+var _ Store = (*ClickHouseStore)(nil)
+

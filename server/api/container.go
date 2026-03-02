@@ -108,6 +108,17 @@ func ContainerLogsHandler(store store.Store) http.HandlerFunc {
 			return
 		}
 
+		if len(batch.Logs) > 5000 {
+			utils.WriteError(
+				w,
+				http.StatusBadRequest,
+				"validation_error",
+				"log batch too large (max 5000)",
+				reqID,
+			)
+			return
+		}
+
 		// 🔒 Enforce tenant from auth
 		batch.TenantID = tenantID
 

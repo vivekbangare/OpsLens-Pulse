@@ -14,10 +14,8 @@ import AIPage from "../features/ai/AIPage"
 export default function AppRoutes() {
   return (
     <Routes>
-      {/* Public */}
-      {!import.meta.env.DEV && (
-        <Route path="/login" element={<Login />} />
-      )}
+      
+      <Route path="/login" element={<Login />} />
 
       {/* Protected */}
       <Route element={<ProtectedRoute />}>
