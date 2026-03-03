@@ -1,6 +1,8 @@
 import { NavLink } from "react-router-dom"
+import { useTenant } from "../context/TenantContext"
 
 export default function Sidebar() {
+  const { currentTenant } = useTenant();
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -41,6 +43,12 @@ export default function Sidebar() {
           Admin
         </NavLink>
       </nav>
+      <div className="sidebar-tenant">
+        <div className="tenant-label">Current Tenant</div>
+        <div className="tenant-name">
+          {currentTenant?.name || "No tenant selected"}
+        </div>
+      </div>
     </aside>
   )
 }

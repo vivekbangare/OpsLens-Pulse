@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import GlobalSearch from "../shared/components/GlobalSearch"
 import { useAuth } from "../features/auth/AuthContext"
 import { useNavigate } from "react-router-dom"
+import { useTenant } from "@/context/TenantContext";
 import {
   Bell,
   HelpCircle,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react"
 
 export default function TopBar() {
+  const { tenants, currentTenant, setCurrentTenant } = useTenant();
   const [isDark, setIsDark] = useState(true)
   const [open, setOpen] = useState(false)
   const { logout } = useAuth()
@@ -84,6 +86,19 @@ export default function TopBar() {
             <Moon size={18} />
           )}
         </div>
+        <select
+          value={currentTenant?.id}
+          onChange={(e) => {
+            const selected = tenants.find(t => t.id === e.target.value);
+            if (selected) setCurrentTenant(selected);
+          }}
+        >
+          {tenants.map(t => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
 
         {/* User Dropdown */}
         <div

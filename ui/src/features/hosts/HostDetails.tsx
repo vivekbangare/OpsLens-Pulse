@@ -202,11 +202,23 @@ export default function HostDetails() {
         >
           <h3>Logs (Last {maxLogs})</h3>
 
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button onClick={refreshLogs}>Refresh</button>
-            <button onClick={copyLogs}>Copy</button>
-            <button onClick={downloadLogs}>Download</button>
-            <button onClick={() => navigate(`/logs?agent_id=${agentId}`)}>
+          <div className="logActions">
+            <button className="btn secondary" onClick={refreshLogs}>
+              Refresh
+            </button>
+
+            <button className="btn secondary" onClick={copyLogs}>
+              Copy
+            </button>
+
+            <button className="btn secondary" onClick={downloadLogs}>
+              Download
+            </button>
+
+            <button
+              className="btn primary"
+              onClick={() => navigate(`/logs?agent_id=${agentId}`)}
+            >
               View in Log Explorer →
             </button>
           </div>
